@@ -29,6 +29,7 @@ interface Summary {
   bestTrade: number; worstTrade: number;
   bySignal: Record<string, { trades: number; wins: number; pnl: number }>;
   byReason: Record<string, number>;
+  fetchedTickers: number; totalTickers: number;
 }
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -115,10 +116,13 @@ export default function Backtest() {
       setSummary(data.summary);
       setTrades(data.trades);
       setEquity(data.equityCurve ?? []);
+      const fetchNote = data.summary.fetchedTickers < data.summary.totalTickers
+        ? ` (${data.summary.fetchedTickers}/${data.summary.totalTickers} tickers loaded)`
+        : ` (${data.summary.fetchedTickers} tickers scanned)`;
       if (!data.trades.length)
-        toast.info('No signals — try longer range, lower conviction, or shorter cooldown');
+        toast.info(`No signals found${fetchNote} — try longer range or lower conviction`);
       else
-        toast.success(`${data.trades.length} trades (${data.summary.tradesPerWeek}/wk avg)`);
+        toast.success(`${data.trades.length} trades · ${data.summary.tradesPerWeek}/wk avg${fetchNote}`);
     } catch (e: any) {
       toast.error(e.message ?? 'Backtest failed');
     }

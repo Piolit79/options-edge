@@ -121,11 +121,30 @@ async function fetchBars(ticker: string, days: number): Promise<Bar[]> {
   const to   = new Date().toISOString().split('T')[0];
   const url  = `${POLYGON}/v2/aggs/ticker/${ticker}/range/1/day/${from}/${to}?limit=1000&apiKey=${POLYGON_KEY}`;
   const r = await fetch(url);
+  if (!r.ok) throw new Error(`Polygon ${r.status} for ${ticker}`);
   const d = await r.json();
+  if (d.status === 'ERROR' || d.error) throw new Error(d.error ?? `Polygon error for ${ticker}`);
   return (d.results ?? []).map((b: any) => ({
     o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
     t: new Date(b.t).toISOString().split('T')[0],
   }));
+}
+
+// Pre-fetch all tickers in parallel batches so sequential processing doesn't time out
+async function prefetchBars(tickers: string[], days: number): Promise<Map<string, Bar[]>> {
+  const map = new Map<string, Bar[]>();
+  const BATCH = 10; // 10 concurrent fetches at a time
+  for (let i = 0; i < tickers.length; i += BATCH) {
+    const batch = tickers.slice(i, i + BATCH);
+    const settled = await Promise.allSettled(
+      batch.map(t => fetchBars(t, days).then(bars => ({ t, bars })))
+    );
+    for (const r of settled) {
+      if (r.status === 'fulfilled') map.set(r.value.t, r.value.bars);
+      // rejected = rate-limited or bad ticker — skip silently
+    }
+  }
+  return map;
 }
 
 const CONVICTION_RISK: Record<number, number> = { 3: 0.03, 2: 0.02, 1: 0.01 };
@@ -184,8 +203,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const targetDte      = parseInt(dte);
   const cooldown       = parseInt(cooldown_days);
 
-  // Fetch SPY for regime filter
-  const spyBars = await fetchBars('SPY', daysBack + 300).catch(() => [] as Bar[]);
+  // Pre-fetch all bars in parallel (including SPY for regime filter)
+  // This is far faster than sequential and prevents Vercel timeout on 35+ tickers
+  const fetchDays = daysBack + 300;
+  const allTickers = tickerList.includes('SPY') ? tickerList : ['SPY', ...tickerList];
+  const barsMap = await prefetchBars(allTickers, fetchDays);
+  const spyBars = barsMap.get('SPY') ?? [];
+  const fetchedCount = barsMap.size;
 
   // Running balance (compounding)
   let balance = balance0;
@@ -193,7 +217,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   for (const ticker of tickerList) {
     try {
-      const bars = await fetchBars(ticker, daysBack + 260);
+      const bars = barsMap.get(ticker) ?? [];
       if (bars.length < 220) continue;
 
       let lastEntryIdx = -999;
@@ -363,6 +387,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       worstTrade: allTrades.length ? Math.min(...allTrades.map(t => t.pnlPct)) : 0,
       bySignal,
       byReason,
+      fetchedTickers: fetchedCount,
+      totalTickers: allTickers.length,
     },
     equityCurve,
     trades: allTrades,
