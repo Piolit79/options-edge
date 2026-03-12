@@ -66,7 +66,7 @@ function fmt(n: number) {
 }
 
 export default function Backtest() {
-  const [scanMode, setScanMode]           = useState<'tier1'|'sectors'>('tier1');
+  const [scanMode, setScanMode]           = useState<'tier1'|'all'|'sectors'>('tier1');
   const [selectedSectors, setSelectedSectors] = useState<string[]>(ALL_SECTORS);
   const [days, setDays]                   = useState('365');
   const [startingBalance, setStartingBalance] = useState('10000');
@@ -89,13 +89,16 @@ export default function Backtest() {
   const toggleSector = (s: string) =>
     setSelectedSectors(p => p.includes(s) ? p.filter(x => x !== s) : [...p, s]);
 
+  const totalUniverseCount = Object.values(UNIVERSE_COUNTS).reduce((a, b) => a + b, 0);
   const tickerCount = scanMode === 'tier1' ? 35
+    : scanMode === 'all' ? totalUniverseCount
     : selectedSectors.reduce((n, s) => n + (UNIVERSE_COUNTS[s] ?? 0), 0);
 
   const run = async () => {
     setLoading(true); setSummary(null); setTrades([]); setEquity([]);
     try {
       const sectors = scanMode === 'tier1' ? 'tier1'
+        : scanMode === 'all' ? 'all'
         : selectedSectors.length === ALL_SECTORS.length ? 'all'
         : selectedSectors.join(',');
       const params = new URLSearchParams({
@@ -152,15 +155,23 @@ export default function Backtest() {
           <div className="space-y-2">
             <label className="text-xs font-semibold">Universe</label>
             <div className="flex gap-2 flex-wrap">
-              {(['tier1','sectors'] as const).map(m => (
-                <button key={m} onClick={() => setScanMode(m)}
+              {(['tier1','all','sectors'] as const).map(m => (
+                <button key={m} onClick={() => setScanMode(m as any)}
                   className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${scanMode === m ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>
-                  {m === 'tier1' ? 'Top 35 (highest OI)' : 'By Sector'}
+                  {m === 'tier1' ? 'Top 35 (highest OI)' : m === 'all' ? 'All (~200 stocks)' : 'By Sector'}
                 </button>
               ))}
             </div>
             {scanMode === 'sectors' && (
               <div className="flex flex-wrap gap-1.5 pt-1">
+                <button onClick={() => setSelectedSectors(ALL_SECTORS)}
+                  className="px-2.5 py-1 rounded text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground">
+                  Select All
+                </button>
+                <button onClick={() => setSelectedSectors([])}
+                  className="px-2.5 py-1 rounded text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground">
+                  Clear
+                </button>
                 {ALL_SECTORS.map(s => (
                   <button key={s} onClick={() => toggleSector(s)}
                     className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors ${selectedSectors.includes(s) ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
@@ -217,7 +228,6 @@ export default function Backtest() {
                 { label: 'Min Conviction', value: minConviction, set: setMinConviction },
                 { label: 'Cooldown Days',  value: cooldown,      set: setCooldown,
                   hint: 'Min days between trades on same ticker' },
-                { label: 'Profit Target %',value: profitTarget,  set: setProfitTarget },
               ].map(({ label, value, set, hint }) => (
                 <div key={label} className="space-y-1">
                   <label className="text-[11px] text-muted-foreground">{label}</label>
@@ -225,6 +235,21 @@ export default function Backtest() {
                   {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
                 </div>
               ))}
+              <div className="space-y-1">
+                <label className={`text-[11px] ${useTrailing ? 'text-muted-foreground/40' : 'text-muted-foreground'}`}>
+                  Profit Target %
+                </label>
+                <Input
+                  type="number" value={profitTarget}
+                  onChange={e => setProfitTarget(e.target.value)}
+                  disabled={useTrailing}
+                  className={`h-8 text-sm ${useTrailing ? 'opacity-40' : ''}`}
+                />
+                {useTrailing
+                  ? <p className="text-[10px] text-blue-400">Unlimited — trailing stop exits</p>
+                  : <p className="text-[10px] text-muted-foreground">Hard cap on upside</p>
+                }
+              </div>
             </div>
           </div>
 
@@ -240,8 +265,8 @@ export default function Backtest() {
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   {useTrailing
-                    ? `Once up ${trailTrigger}%, trails ${trailPct}% below the peak. Locks in gains without capping upside.`
-                    : 'Fixed stop loss only — exits at exactly the stop % (enforced on intraday low).'}
+                    ? `Unlimited upside — once up ${trailTrigger}%, trails ${trailPct}% below the intraday peak. Profit target is disabled.`
+                    : 'Fixed stop + profit target. Exits at exactly the stop % (enforced on intraday low).'}
                 </p>
               </div>
               <button onClick={() => setUseTrailing(!useTrailing)}

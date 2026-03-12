@@ -59,13 +59,21 @@ function detectSignal(
   if (closes.length < 201) return null;
   if (!spyAboveMa50) return null;  // market regime gate
 
-  const price    = closes[closes.length - 1];
-  const ma50     = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
-  const ma200    = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
-  const high52   = Math.max(...closes.slice(-252));
-  const rsi      = calcRSI(closes.slice(-16));
-  const above50  = price > ma50;
-  const above200 = price > ma200;
+  const price      = closes[closes.length - 1];
+  const ma20       = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const ma50       = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+  const ma200      = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
+  // MA50 from 20 bars ago — confirms the 50-day is trending UP, not flat/declining
+  const ma50_20ago = closes.slice(-70, -20).reduce((a, b) => a + b, 0) / 50;
+  const ma50Rising = ma50 > ma50_20ago * 1.001;
+  const high52     = Math.max(...closes.slice(-252));
+  const rsi        = calcRSI(closes.slice(-16));
+  // RSI 3 bars ago — confirms dip is exhausted and momentum is starting to reverse
+  const rsiPrev    = calcRSI(closes.slice(-19, -3));
+  const rsiTurningUp = rsi > rsiPrev;
+  const above20    = price > ma20;
+  const above50    = price > ma50;
+  const above200   = price > ma200;
 
   const recentHigh10 = Math.max(...closes.slice(-10));
   const dipPct       = ((recentHigh10 - price) / recentHigh10) * 100;
@@ -73,31 +81,33 @@ function detectSignal(
   const lastVol      = volumes[volumes.length - 1];
   const distFromMa50 = Math.abs(price - ma50) / ma50 * 100;
 
-  // 1. Momentum Dip — best setup, high conviction
-  if (above50 && above200 && rsi < 38 &&
+  // 1. Momentum Dip — pullback in strong uptrend, RSI starting to turn back up
+  if (above50 && above200 && ma50Rising &&
+      rsi < 38 && rsiTurningUp &&
       dipPct >= 4 && dipPct <= 12 &&
       lastVol < avgVol20 * 1.5 &&     // sellers fading
       price > high52 * 0.80)
     return { signal: 'momentum_dip', score: 3 };
 
-  // 2. Pullback to MA50 — reliable support touch in uptrend
-  // Price comes within 1.5% of MA50 from above, RSI 35-50, still in long-term uptrend
-  if (above200 && above50 &&
-      distFromMa50 <= 1.5 &&
-      rsi >= 35 && rsi <= 52 &&
+  // 2. MA50 Support — bounce off key support with MA50 trending up
+  if (above200 && above50 && ma50Rising &&
+      distFromMa50 <= 2.0 &&
+      rsi >= 32 && rsi <= 52 && rsiTurningUp &&
       price > high52 * 0.75)
     return { signal: 'ma50_support', score: 3 };
 
-  // 3. Oversold in Uptrend — deeper pullback but trend intact
-  if (above50 && above200 && rsi < 32 && price > high52 * 0.80)
+  // 3. Oversold in Uptrend — deep RSI reset with reversal confirmation
+  if (above50 && above200 && ma50Rising &&
+      rsi < 30 && rsiTurningUp &&
+      price > high52 * 0.80)
     return { signal: 'oversold_uptrend', score: 2 };
 
-  // 4. Breakout — new 20-day high on strong volume
+  // 4. Breakout — new 20-day high on strong volume, all MAs aligned
   const high20prev = Math.max(...closes.slice(-21, -1));
-  if (above50 && above200 &&
+  if (above20 && above50 && above200 &&
       price > high20prev &&
       lastVol > avgVol20 * 2.0 &&
-      rsi > 50 && rsi < 70)
+      rsi > 52 && rsi < 70)
     return { signal: 'breakout', score: 2 };
 
   return null;
@@ -256,10 +266,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
           }
 
-          // Profit target — check intraday high
+          // Profit target — only applies when trailing stop is OFF
+          // When trailing is ON, the trailing stop itself is the exit; no cap on upside
           const highPnlPct = (intradayHighPrice - entryOptionPrice) / entryOptionPrice;
-          if (highPnlPct >= profitTarget) {
-            // Exit at target price, not the high (conservative)
+          if (!useTrailing && highPnlPct >= profitTarget) {
             const targetPrice = entryOptionPrice * (1 + profitTarget);
             exitDate = bars[j].t; exitOptionPrice = targetPrice;
             closeReason = 'profit_target'; daysHeld = j - i; break;
