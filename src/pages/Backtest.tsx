@@ -12,7 +12,7 @@ interface BacktestTrade {
   ticker: string; signal: string; score: number;
   entryDate: string; exitDate: string; daysHeld: number;
   stockEntryPrice: number; strike: number;
-  optionSymbol: string;
+  optionSymbol: string; dte: number;
   entryOptionPrice: number; exitOptionPrice: number; peakOptionPrice: number;
   contracts: number; capitalRisked: number;
   pnlPct: number; pnlDollars: number;
@@ -83,7 +83,6 @@ export default function Backtest() {
   const [trailTrigger, setTrailTrigger]   = useState('25');
   const [trailPct, setTrailPct]           = useState('25');
   const [minConviction, setMinConviction] = useState('2');
-  const [dte, setDte]                     = useState('45');
   const [cooldown, setCooldown]           = useState('15');
 
   const [loading, setLoading] = useState(false);
@@ -112,7 +111,7 @@ export default function Backtest() {
         profit_target: profitTarget, stop_loss: stopLoss,
         trailing: useTrailing ? 'true' : 'false',
         trail_trigger: trailTrigger, trail_pct: trailPct,
-        min_conviction: minConviction, dte, cooldown_days: cooldown,
+        min_conviction: minConviction, cooldown_days: cooldown,
         risk_score3: riskScore3, risk_score2: riskScore2, risk_score1: riskScore1,
         max_contracts: maxContracts,
       });
@@ -254,19 +253,22 @@ export default function Backtest() {
           <div className="space-y-2">
             <label className="text-xs font-semibold">Trade Parameters</label>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              {[
-                { label: 'Days Back',      value: days,          set: setDays },
-                { label: 'Option DTE',     value: dte,           set: setDte },
-                { label: 'Min Conviction', value: minConviction, set: setMinConviction },
-                { label: 'Cooldown Days',  value: cooldown,      set: setCooldown,
-                  hint: 'Min days between trades on same ticker' },
-              ].map(({ label, value, set, hint }) => (
-                <div key={label} className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">{label}</label>
-                  <Input type="number" value={value} onChange={e => set(e.target.value)} className="h-8 text-sm" />
-                  {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
-                </div>
-              ))}
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">Days Back</label>
+                <Input type="number" value={days} onChange={e => setDays(e.target.value)} className="h-8 text-sm" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">Min Conviction</label>
+                <Input type="number" value={minConviction} onChange={e => setMinConviction(e.target.value)} className="h-8 text-sm" />
+                <p className="text-[10px] text-muted-foreground">
+                  3 = best setups only · 2 = all setups · 1 = marginal included
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">Cooldown Days</label>
+                <Input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className="h-8 text-sm" />
+                <p className="text-[10px] text-muted-foreground">Min days between trades on same ticker</p>
+              </div>
               <div className="space-y-1">
                 <label className={`text-[11px] ${useTrailing ? 'text-muted-foreground/40' : 'text-muted-foreground'}`}>
                   Profit Target %
@@ -464,6 +466,7 @@ export default function Backtest() {
                       <th className="text-left px-3 py-2">Stock</th>
                       <th className="text-left px-3 py-2">Setup</th>
                       <th className="text-left px-3 py-2">Contract</th>
+                      <th className="text-right px-3 py-2">DTE</th>
                       <th className="text-left px-3 py-2">Entry</th>
                       <th className="text-left px-3 py-2">Exit</th>
                       <th className="text-right px-3 py-2">Days</th>
@@ -484,6 +487,7 @@ export default function Backtest() {
                         <td className="px-3 py-1.5 font-semibold">{t.ticker}</td>
                         <td className="px-3 py-1.5"><Badge variant="outline" className="text-[9px]">{SIGNAL_LABELS[t.signal] ?? t.signal}</Badge></td>
                         <td className="px-3 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">{t.optionSymbol}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-right">{t.dte}d</td>
                         <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{t.entryDate}</td>
                         <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{t.exitDate}</td>
                         <td className="px-3 py-1.5 tabular-nums text-right">{t.daysHeld}</td>

@@ -157,6 +157,35 @@ async function prefetchBars(tickers: string[], days: number): Promise<Map<string
 
 const CONVICTION_RISK: Record<number, number> = { 3: 0.03, 2: 0.02, 1: 0.01 };
 
+// Scan the full weekly→annual expiry ladder and pick the contract with the best
+// risk/reward profile. Score-3 setups expect faster moves → prefer shorter DTE.
+// Score-2 setups are slower plays → prefer a bit more time.
+function selectBestDte(
+  stockPrice: number, strike: number, sigma: number, score: number,
+): { dte: number; price: number } {
+  const candidates = [7, 14, 21, 30, 45, 60, 90, 120, 180, 252]; // weekly → 1-year
+  const idealDte   = score >= 3 ? 45 : 60;
+  let best: { dte: number; price: number; rank: number } | null = null;
+
+  for (const dte of candidates) {
+    const T    = dte / 365.25;
+    const price = bsCall(stockPrice, strike, T, sigma);
+    const pct  = price / stockPrice;
+    // Sweet spot: 1.5 – 8% of stock price. Too cheap = near-worthless weekly;
+    // too expensive = theta hole that's hard to overcome.
+    if (pct < 0.015 || pct > 0.08) continue;
+    // Rank by proximity to idealDte + mild penalty for expensive premium
+    const rank = Math.abs(dte - idealDte) / 100 + Math.max(0, pct - 0.05) * 5;
+    if (!best || rank < best.rank) best = { dte, price, rank };
+  }
+
+  if (!best) {
+    const T = 45 / 365.25;
+    best = { dte: 45, price: bsCall(stockPrice, strike, T, sigma), rank: 0 };
+  }
+  return { dte: best.dte, price: best.price };
+}
+
 function buildOCCSymbol(ticker: string, expDate: string, strike: number): string {
   // expDate is YYYY-MM-DD, OCC format: TICKER(6) + YYMMDD + C + 8-digit strike (5 int 3 dec)
   const d = expDate.replace(/-/g, '').slice(2); // YYMMDD
@@ -168,7 +197,7 @@ export interface BacktestTrade {
   ticker: string; signal: string; score: number;
   entryDate: string; exitDate: string; daysHeld: number;
   stockEntryPrice: number; strike: number;
-  optionSymbol: string;
+  optionSymbol: string; dte: number;
   entryOptionPrice: number; exitOptionPrice: number; peakOptionPrice: number;
   contracts: number; capitalRisked: number;
   pnlPct: number; pnlDollars: number;
@@ -187,7 +216,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     trail_pct      = '25',
     trail_trigger  = '25',
     min_conviction = '2',
-    dte            = '45',
     cooldown_days  = '15',
     risk_score3    = '5',   // % of balance to risk on score-3 setups
     risk_score2    = '3',   // % of balance to risk on score-2 setups
@@ -212,7 +240,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const trailPct       = parseFloat(trail_pct) / 100;
   const trailTrigger   = parseFloat(trail_trigger) / 100;
   const minConviction  = parseInt(min_conviction);
-  const targetDte      = parseInt(dte);
   const cooldown       = parseInt(cooldown_days);
   const convictionRisk: Record<number, number> = {
     3: parseFloat(risk_score3) / 100,
@@ -263,11 +290,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const stockEntryPrice = bars[i].c;
         const strike          = Math.round(stockEntryPrice / 5) * 5;
         const sigma           = annualVol(closes);
-        const T0              = targetDte / 365.25;
-        const entryOptionPrice = bsCall(stockEntryPrice, strike, T0, sigma);
+
+        // Auto-select best DTE from weekly → 1-year ladder
+        const { dte: selectedDte, price: entryOptionPrice } =
+          selectBestDte(stockEntryPrice, strike, sigma, sig.score);
         if (entryOptionPrice < 0.10) continue;
 
-        const expirationDate = new Date(new Date(barDate).getTime() + targetDte * 86400000)
+        const expirationDate = new Date(new Date(barDate).getTime() + selectedDte * 86400000)
           .toISOString().split('T')[0];
         const optionSymbol = buildOCCSymbol(ticker, expirationDate, strike);
 
@@ -283,15 +312,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         );
 
         // ── Simulate day-by-day ───────────────────────────────────────────
-        let exitDate         = bars[Math.min(i + targetDte, bars.length - 1)].t;
+        let exitDate         = bars[Math.min(i + selectedDte, bars.length - 1)].t;
         let exitOptionPrice  = entryOptionPrice;
         let peakOptionPrice  = entryOptionPrice;
         let closeReason: BacktestTrade['closeReason'] = 'expired';
         let daysHeld         = 0;
         let trailingStop     = 0;
 
-        for (let j = i + 1; j < Math.min(i + targetDte + 1, bars.length); j++) {
-          const daysLeft  = targetDte - (j - i);
+        for (let j = i + 1; j < Math.min(i + selectedDte + 1, bars.length); j++) {
+          const daysLeft  = selectedDte - (j - i);
           const T         = Math.max(daysLeft / 365.25, 0);
           const futSigma  = annualVol(bars.slice(0, j + 1).map(b => b.c));
 
@@ -334,7 +363,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             closeReason = 'stop_loss'; daysHeld = j - i; break;
           }
 
-          if (j === Math.min(i + targetDte, bars.length - 1)) {
+          if (j === Math.min(i + selectedDte, bars.length - 1)) {
             exitDate = bars[j].t; exitOptionPrice = closePrice;
             closeReason = 'expired'; daysHeld = j - i;
           }
@@ -350,7 +379,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ticker, signal: sig.signal, score: sig.score,
           entryDate: barDate, exitDate, daysHeld,
           stockEntryPrice: Math.round(stockEntryPrice * 100) / 100,
-          strike, optionSymbol,
+          strike, optionSymbol, dte: selectedDte,
           entryOptionPrice:  Math.round(entryOptionPrice * 100) / 100,
           exitOptionPrice:   Math.round(exitOptionPrice * 100) / 100,
           peakOptionPrice:   Math.round(peakOptionPrice * 100) / 100,
