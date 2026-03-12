@@ -4,13 +4,12 @@ import { buildOCCSymbol, buildPolygonSymbol, placeLiveOrder } from './tt-place';
 
 const supabase = createClient(
   process.env.SUPABASE_URL ?? 'https://nlusfndskgdcottasfdy.supabase.co',
-  process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_ANON_KEY ?? ''
+  process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sdXNmbmRza2dkY290dGFzZmR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NTY0NDYsImV4cCI6MjA4ODMzMjQ0Nn0.sGSdCsQl0wgAHk5L-xi6ZdrLkuAEaHcdhJ8uazjTjbA'
 );
 
 const POLYGON_KEY = process.env.POLYGON_API_KEY!;
 const POLYGON = 'https://api.polygon.io';
 
-// Conviction → risk % of virtual balance
 const CONVICTION_RISK: Record<number, number> = { 3: 0.03, 2: 0.02, 1: 0.01 };
 
 async function getSettings(): Promise<Record<string, string>> {
@@ -54,16 +53,16 @@ async function scoreTickerSignal(ticker: string): Promise<{ signal: string; scor
   const bars = hist.results ?? [];
   if (bars.length < 50) return null;
 
-  const closes = bars.map((b: any) => b.c as number);
+  const closes: number[] = bars.map((b: any) => b.c);
   const latest = bars[bars.length - 1];
-  const prev = bars[bars.length - 2];
 
   const ma50 = closes.slice(-50).reduce((a: number, b: number) => a + b, 0) / 50;
   const ma200 = closes.length >= 200 ? closes.slice(-200).reduce((a: number, b: number) => a + b, 0) / 200 : null;
   const rsi = calcRSI(closes.slice(-15));
   const above50 = latest.c > ma50;
   const above200 = ma200 ? latest.c > ma200 : true;
-  const dip = ((Math.max(...closes.slice(-10)) - latest.c) / Math.max(...closes.slice(-10))) * 100;
+  const recentHigh = Math.max(...closes.slice(-10));
+  const dip = ((recentHigh - latest.c) / recentHigh) * 100;
   const avgVol = bars.slice(-20).reduce((a: any, b: any) => a + b.v, 0) / 20;
 
   let signal = 'none';
@@ -81,142 +80,137 @@ async function scoreTickerSignal(ticker: string): Promise<{ signal: string; scor
 }
 
 async function findBestOption(ticker: string, stockPrice: number): Promise<{
-  strike: number; expiration: string; mid: number; delta: number;
+  strike: number; expiration: string; mid: number; optionTicker: string;
 } | null> {
-  // Target: ATM call, 45-60 DTE
-  const target = new Date();
-  target.setDate(target.getDate() + 52); // ~52 days out center
-  const targetDate = target.toISOString().split('T')[0];
-
-  const res = await fetch(
-    `${POLYGON}/v3/snapshot/options/${ticker}?contract_type=call&limit=50&apiKey=${POLYGON_KEY}`
+  // Get reference contracts — calls, 30–75 DTE
+  const contractsRes = await fetch(
+    `${POLYGON}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=call&limit=100&apiKey=${POLYGON_KEY}`
   );
-  const data = await res.json();
-  const contracts = data.results ?? [];
+  const contractsData = await contractsRes.json();
+  const contracts: any[] = contractsData.results ?? [];
 
-  if (!contracts.length) return null;
-
-  // Filter: 30-75 DTE, delta 0.35-0.65
   const now = Date.now();
   const candidates = contracts
     .map((c: any) => {
-      const exp = c.details?.expiration_date ?? '';
-      const dte = Math.round((new Date(exp).getTime() - now) / 864e5);
-      const delta = c.greeks?.delta ?? 0;
-      const strike = c.details?.strike_price ?? 0;
-      const day = c.day ?? {};
-      const bid = day.open ?? 0;
-      const ask = day.close ?? 0;
-      const mid = day.vwap ?? (bid + ask) / 2;
-      return { strike, expiration: exp, dte, delta, mid };
+      const dte = Math.round((new Date(c.expiration_date).getTime() - now) / 864e5);
+      const distFromATM = Math.abs(c.strike_price - stockPrice);
+      return { strike: c.strike_price, expiration: c.expiration_date, dte, distFromATM, optionTicker: c.ticker };
     })
-    .filter((c: any) => c.dte >= 30 && c.dte <= 75 && c.delta >= 0.35 && c.delta <= 0.65 && c.mid > 0);
+    .filter((c: any) => c.dte >= 30 && c.dte <= 75);
 
   if (!candidates.length) {
-    // Fallback: pick ATM strike with closest expiration >= 30 days
-    const atm = Math.round(stockPrice / 5) * 5;
-    const expDate = new Date();
-    expDate.setDate(expDate.getDate() + 45);
-    return { strike: atm, expiration: expDate.toISOString().split('T')[0], mid: stockPrice * 0.03, delta: 0.5 };
+    // Fallback: nearest expiration >= 45 days, ATM strike
+    const exp = new Date();
+    exp.setDate(exp.getDate() + 45);
+    const strike = Math.round(stockPrice / 5) * 5;
+    const optionTicker = buildPolygonSymbol(ticker, exp.toISOString().split('T')[0], 'call', strike);
+    return { strike, expiration: exp.toISOString().split('T')[0], mid: stockPrice * 0.025, optionTicker };
   }
 
-  // Sort by closest delta to 0.50
-  candidates.sort((a: any, b: any) => Math.abs(a.delta - 0.5) - Math.abs(b.delta - 0.5));
-  return candidates[0];
+  // Sort by closest strike to ATM, then closest DTE to 52
+  candidates.sort((a: any, b: any) => a.distFromATM - b.distFromATM || Math.abs(a.dte - 52) - Math.abs(b.dte - 52));
+  const best = candidates[0];
+
+  // Get prev day price for this contract
+  const aggRes = await fetch(
+    `${POLYGON}/v2/aggs/ticker/${encodeURIComponent(best.optionTicker)}/prev?apiKey=${POLYGON_KEY}`
+  );
+  const aggData = await aggRes.json();
+  const agg = aggData.results?.[0];
+  const mid = agg?.vw ?? agg?.c ?? (stockPrice * 0.025);
+
+  return { strike: best.strike, expiration: best.expiration, mid, optionTicker: best.optionTicker };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const settings = await getSettings();
+  try {
+    const settings = await getSettings();
 
-  if (settings.auto_enabled !== 'true') {
-    return res.json({ message: 'Auto-trader disabled', orders: [] });
-  }
-
-  // Check market hours (9:30–16:00 ET = 14:30–21:00 UTC, but scan at open ~14:45 UTC)
-  const now = new Date();
-  const utcH = now.getUTCHours();
-  const utcM = now.getUTCMinutes();
-  const utcTotal = utcH * 60 + utcM;
-  const marketOpen = 14 * 60 + 30; // 9:30 ET
-  const marketClose = 21 * 60;     // 4:00 ET
-  const day = now.getUTCDay();
-
-  if (day === 0 || day === 6 || utcTotal < marketOpen || utcTotal > marketClose) {
-    return res.json({ message: 'Market closed', orders: [] });
-  }
-
-  const maxPositions = parseInt(settings.max_positions ?? '5');
-  const profitTarget = parseFloat(settings.profit_target_pct ?? '50') / 100;
-  const stopLoss = parseFloat(settings.stop_loss_pct ?? '35') / 100;
-  const virtualBalance = parseFloat(settings.virtual_balance ?? '10000');
-  const minConviction = parseInt(settings.min_conviction ?? '2');
-  const isSimulation = settings.mode !== 'live';
-
-  const [watchlist, openTickers] = await Promise.all([getWatchlist(), getOpenPositionTickers()]);
-
-  const { count } = await supabase.from('oe_auto_orders').select('*', { count: 'exact', head: true }).eq('status', 'open') as any;
-  const openCount = count ?? 0;
-
-  if (openCount >= maxPositions) {
-    return res.json({ message: `Max positions (${maxPositions}) reached`, orders: [] });
-  }
-
-  const placed: any[] = [];
-
-  for (const ticker of watchlist) {
-    if (openCount + placed.length >= maxPositions) break;
-    if (openTickers.includes(ticker)) continue; // already have this ticker
-
-    const signal = await scoreTickerSignal(ticker).catch(() => null);
-    if (!signal || signal.score < minConviction || signal.signal === 'none') continue;
-
-    const option = await findBestOption(ticker, signal.price).catch(() => null);
-    if (!option || option.mid <= 0) continue;
-
-    const riskPct = CONVICTION_RISK[signal.score] ?? 0.02;
-    const riskDollars = virtualBalance * riskPct;
-    const costPerContract = option.mid * 100;
-    const contracts = Math.max(1, Math.floor(riskDollars / costPerContract));
-    const occSymbol = buildOCCSymbol(ticker, option.expiration, 'call', option.strike);
-    const polygonSymbol = buildPolygonSymbol(ticker, option.expiration, 'call', option.strike);
-
-    let ttOrderId: string | undefined;
-    let filledPrice = option.mid;
-
-    if (!isSimulation) {
-      try {
-        const result = await placeLiveOrder(ticker, option.expiration, 'call', option.strike, contracts, option.mid);
-        ttOrderId = result.orderId;
-        filledPrice = result.fillPrice;
-      } catch (e: any) {
-        console.error(`Live order failed for ${ticker}:`, e.message);
-        continue;
-      }
+    if (settings.auto_enabled !== 'true') {
+      return res.json({ message: 'Auto-trader is disabled. Enable it on the Auto Trader page.', orders: [] });
     }
 
-    const order = {
-      id: crypto.randomUUID(),
-      ticker,
-      option_symbol: occSymbol,
-      polygon_symbol: polygonSymbol,
-      strike: option.strike,
-      expiration: option.expiration,
-      option_type: 'call',
-      contracts,
-      entry_price: filledPrice,
-      signal_type: signal.signal,
-      conviction: signal.score,
-      risk_pct: riskPct * 100,
-      status: 'open',
-      simulated: isSimulation,
-      filled_price: filledPrice,
-      tt_order_id: ttOrderId ?? null,
-      opened_at: new Date().toISOString(),
-    };
+    // Market hours check (9:30–16:00 ET = 14:30–21:00 UTC)
+    const now = new Date();
+    const utcTotal = now.getUTCHours() * 60 + now.getUTCMinutes();
+    const day = now.getUTCDay();
+    if (day === 0 || day === 6 || utcTotal < 14 * 60 + 30 || utcTotal > 21 * 60) {
+      return res.json({ message: 'Market is closed.', orders: [] });
+    }
 
-    await supabase.from('oe_auto_orders').insert(order);
-    placed.push(order);
+    const maxPositions = parseInt(settings.max_positions ?? '5');
+    const virtualBalance = parseFloat(settings.virtual_balance ?? '10000');
+    const minConviction = parseInt(settings.min_conviction ?? '2');
+    const isSimulation = settings.mode !== 'live';
+
+    const [watchlist, openTickers] = await Promise.all([getWatchlist(), getOpenPositionTickers()]);
+    const { count } = await supabase.from('oe_auto_orders').select('*', { count: 'exact', head: true }).eq('status', 'open') as any;
+    const openCount = count ?? 0;
+
+    if (openCount >= maxPositions) {
+      return res.json({ message: `Max positions (${maxPositions}) reached.`, orders: [] });
+    }
+
+    const placed: any[] = [];
+
+    for (const ticker of watchlist) {
+      if (openCount + placed.length >= maxPositions) break;
+      if (openTickers.includes(ticker)) continue;
+
+      const signal = await scoreTickerSignal(ticker).catch(() => null);
+      if (!signal || signal.score < minConviction || signal.signal === 'none') continue;
+
+      const option = await findBestOption(ticker, signal.price).catch(() => null);
+      if (!option || option.mid <= 0) continue;
+
+      const riskPct = CONVICTION_RISK[signal.score] ?? 0.02;
+      const riskDollars = virtualBalance * riskPct;
+      const costPerContract = option.mid * 100;
+      const contracts = Math.max(1, Math.floor(riskDollars / costPerContract));
+
+      const occSymbol = buildOCCSymbol(ticker, option.expiration, 'call', option.strike);
+      const polygonSymbol = buildPolygonSymbol(ticker, option.expiration, 'call', option.strike);
+
+      let ttOrderId: string | undefined;
+      let filledPrice = option.mid;
+
+      if (!isSimulation) {
+        try {
+          const result = await placeLiveOrder(ticker, option.expiration, 'call', option.strike, contracts, option.mid);
+          ttOrderId = result.orderId;
+          filledPrice = result.fillPrice;
+        } catch (e: any) {
+          console.error(`Live order failed for ${ticker}:`, e.message);
+          continue;
+        }
+      }
+
+      const order = {
+        id: crypto.randomUUID(),
+        ticker,
+        option_symbol: occSymbol,
+        polygon_symbol: polygonSymbol,
+        strike: option.strike,
+        expiration: option.expiration,
+        option_type: 'call',
+        contracts,
+        entry_price: filledPrice,
+        signal_type: signal.signal,
+        conviction: signal.score,
+        risk_pct: riskPct * 100,
+        status: 'open',
+        simulated: isSimulation,
+        filled_price: filledPrice,
+        tt_order_id: ttOrderId ?? null,
+        opened_at: new Date().toISOString(),
+      };
+
+      await supabase.from('oe_auto_orders').insert(order);
+      placed.push(order);
+    }
+
+    res.json({ message: `Scan complete — ${placed.length} order(s) placed`, orders: placed });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
   }
-
-  res.json({ message: `Scan complete — ${placed.length} order(s) placed`, orders: placed });
 }

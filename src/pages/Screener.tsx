@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -34,15 +34,10 @@ export default function Screener() {
   const [loading, setLoading] = useState(false);
   const [newTicker, setNewTicker] = useState('');
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [watchlistLoaded, setWatchlistLoaded] = useState(false);
-
-  const loadWatchlist = async () => {
-    const { data } = await supabase.from('oe_watchlist' as any).select('*').order('added_at');
-    if (data) setWatchlist(data as WatchlistItem[]);
-    setWatchlistLoaded(true);
-  };
-
-  if (!watchlistLoaded) loadWatchlist();
+  useEffect(() => {
+    supabase.from('oe_watchlist' as any).select('*').order('added_at')
+      .then(({ data }) => { if (data) setWatchlist(data as WatchlistItem[]); });
+  }, []);
 
   const addTicker = async () => {
     const t = newTicker.toUpperCase().trim();

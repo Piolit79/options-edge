@@ -10,80 +10,86 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const t = ticker.toUpperCase();
 
   try {
-    // Get current price
+    // Get current stock price
     const quoteRes = await fetch(`${BASE}/v2/aggs/ticker/${t}/prev?apiKey=${POLYGON_KEY}`);
     const quote = await quoteRes.json();
     const bar = quote.results?.[0];
     if (!bar) return res.status(404).json({ error: `No quote for ${t}` });
 
-    // Get options contracts
-    const expParam = expiration ? `&expiration_date=${expiration}` : '';
-    const contractsRes = await fetch(
-      `${BASE}/v3/reference/options/contracts?underlying_ticker=${t}&contract_type=call&limit=250${expParam}&apiKey=${POLYGON_KEY}`
-    );
-    const putsRes = await fetch(
-      `${BASE}/v3/reference/options/contracts?underlying_ticker=${t}&contract_type=put&limit=250${expParam}&apiKey=${POLYGON_KEY}`
-    );
+    const stockPrice: number = bar.c;
+    const changePct: number = ((bar.c - bar.o) / bar.o) * 100;
 
-    const [contracts, puts] = await Promise.all([contractsRes.json(), putsRes.json()]);
-
-    // Get snapshots for greeks + IV
-    const snapshotRes = await fetch(
-      `${BASE}/v3/snapshot/options/${t}?limit=250${expParam}&apiKey=${POLYGON_KEY}`
-    );
-    const snapshot = await snapshotRes.json();
-
-    const snapMap: Record<string, any> = {};
-    (snapshot.results ?? []).forEach((s: any) => {
-      snapMap[s.details?.ticker ?? s.ticker] = s;
-    });
-
-    const formatContract = (c: any) => {
-      const snap = snapMap[c.ticker] ?? {};
-      const greeks = snap.greeks ?? {};
-      const day = snap.day ?? {};
-      const iv = snap.implied_volatility ?? 0;
-      return {
-        strike: c.strike_price,
-        expiration: c.expiration_date,
-        bid: day.open ?? 0,
-        ask: day.close ?? 0,
-        mid: day.vwap ?? (((day.open ?? 0) + (day.close ?? 0)) / 2),
-        volume: day.volume ?? 0,
-        open_interest: snap.open_interest ?? 0,
-        implied_volatility: iv,
-        delta: greeks.delta ?? 0,
-        theta: greeks.theta ?? 0,
-        gamma: greeks.gamma ?? 0,
-        in_the_money: c.strike_price < bar.c,
-      };
-    };
-
-    // Get unique expirations from both
-    const allExpirations = [
-      ...(contracts.results ?? []),
-      ...(puts.results ?? []),
-    ].map((c: any) => c.expiration_date).filter(Boolean);
-    const expirations = [...new Set(allExpirations)].sort();
-
-    // 52-week price range for IV rank proxy
+    // Get 52-week range for IV rank proxy
     const histRes = await fetch(
-      `${BASE}/v2/aggs/ticker/${t}/range/1/day/${new Date(Date.now() - 365*864e5).toISOString().split('T')[0]}/${new Date().toISOString().split('T')[0]}?limit=300&apiKey=${POLYGON_KEY}`
+      `${BASE}/v2/aggs/ticker/${t}/range/1/day/${new Date(Date.now() - 365 * 864e5).toISOString().split('T')[0]}/${new Date().toISOString().split('T')[0]}?limit=300&apiKey=${POLYGON_KEY}`
     );
     const hist = await histRes.json();
-    const closes = (hist.results ?? []).map((r: any) => r.c as number);
-    const high52 = closes.length ? Math.max(...closes) : bar.c;
-    const low52 = closes.length ? Math.min(...closes) : bar.c;
-    const iv_rank = high52 === low52 ? 50 : Math.round(((bar.c - low52) / (high52 - low52)) * 100);
+    const closes: number[] = (hist.results ?? []).map((r: any) => r.c);
+    const high52 = closes.length ? Math.max(...closes) : stockPrice;
+    const low52 = closes.length ? Math.min(...closes) : stockPrice;
+    const iv_rank = high52 === low52 ? 50 : Math.round(((stockPrice - low52) / (high52 - low52)) * 100);
+
+    // Get reference contracts (calls + puts)
+    const expParam = expiration && typeof expiration === 'string' ? `&expiration_date=${expiration}` : '';
+    const [callsRef, putsRef] = await Promise.all([
+      fetch(`${BASE}/v3/reference/options/contracts?underlying_ticker=${t}&contract_type=call&limit=100${expParam}&apiKey=${POLYGON_KEY}`).then(r => r.json()),
+      fetch(`${BASE}/v3/reference/options/contracts?underlying_ticker=${t}&contract_type=put&limit=100${expParam}&apiKey=${POLYGON_KEY}`).then(r => r.json()),
+    ]);
+
+    const callContracts: any[] = callsRef.results ?? [];
+    const putContracts: any[] = putsRef.results ?? [];
+
+    // Get all unique expirations
+    const allExps = [...callContracts, ...putContracts].map((c: any) => c.expiration_date).filter(Boolean);
+    const expirations = [...new Set(allExps)].sort();
+
+    // Filter to selected expiration or nearest one, pick ~20 strikes around ATM
+    const selectedExp = (expiration as string) || expirations[0];
+    const atmStrike = Math.round(stockPrice / 5) * 5;
+
+    const filterContracts = (contracts: any[]) =>
+      contracts
+        .filter((c: any) => c.expiration_date === selectedExp)
+        .sort((a: any, b: any) => a.strike_price - b.strike_price)
+        .slice(0, 20);
+
+    const selectedCalls = filterContracts(callContracts);
+    const selectedPuts = filterContracts(putContracts);
+
+    // Fetch prev day agg for each contract (batched)
+    const fetchAgg = async (optionTicker: string) => {
+      const r = await fetch(`${BASE}/v2/aggs/ticker/${encodeURIComponent(optionTicker)}/prev?apiKey=${POLYGON_KEY}`);
+      const d = await r.json();
+      return d.results?.[0] ?? null;
+    };
+
+    const [callAggs, putAggs] = await Promise.all([
+      Promise.all(selectedCalls.map((c: any) => fetchAgg(c.ticker))),
+      Promise.all(selectedPuts.map((c: any) => fetchAgg(c.ticker))),
+    ]);
+
+    const formatContract = (contract: any, agg: any) => ({
+      strike: contract.strike_price,
+      expiration: contract.expiration_date,
+      ticker: contract.ticker,
+      bid: agg?.o ?? 0,
+      ask: agg?.c ?? 0,
+      mid: agg?.vw ?? ((( agg?.o ?? 0) + (agg?.c ?? 0)) / 2),
+      volume: agg?.v ?? 0,
+      open_interest: 0,
+      in_the_money: contract.contract_type === 'call'
+        ? contract.strike_price < stockPrice
+        : contract.strike_price > stockPrice,
+    });
 
     res.json({
       ticker: t,
-      price: bar.c,
-      change_pct: ((bar.c - bar.o) / bar.o) * 100,
+      price: stockPrice,
+      change_pct: changePct,
       iv_rank,
       expirations,
-      calls: (contracts.results ?? []).map(formatContract),
-      puts: (puts.results ?? []).map(formatContract),
+      calls: selectedCalls.map((c, i) => formatContract(c, callAggs[i])),
+      puts: selectedPuts.map((c, i) => formatContract(c, putAggs[i])),
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

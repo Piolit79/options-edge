@@ -50,14 +50,21 @@ export default function AutoTrader() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const [settingsRes, ordersRes] = await Promise.all([
-      fetch('/api/auto-settings'),
-      supabase.from('oe_auto_orders' as any).select('*').order('opened_at', { ascending: false }).limit(50),
-    ]);
-    const s = await settingsRes.json();
-    setSettings(s);
-    if (ordersRes.data) setOrders(ordersRes.data as AutoOrder[]);
-    setLoading(false);
+    try {
+      const [settingsRes, ordersRes] = await Promise.all([
+        fetch('/api/auto-settings'),
+        supabase.from('oe_auto_orders' as any).select('*').order('opened_at', { ascending: false }).limit(50),
+      ]);
+      if (settingsRes.ok) {
+        const s = await settingsRes.json();
+        setSettings(s);
+      }
+      if (ordersRes.data) setOrders(ordersRes.data as AutoOrder[]);
+    } catch (e) {
+      console.error('AutoTrader load failed:', e);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);

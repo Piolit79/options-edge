@@ -60,15 +60,12 @@ export default function OptionsChain() {
 
   const contractRow = (c: OptionContract, highlight = false) => (
     <TableRow key={`${c.strike}-${c.expiration}`} className={highlight ? 'bg-primary/10' : c.in_the_money ? 'bg-muted/30' : ''}>
-      <TableCell className={`font-semibold ${highlight ? 'text-primary' : ''}`}>${c.strike}</TableCell>
-      <TableCell className="tabular-nums">{c.bid.toFixed(2)}</TableCell>
-      <TableCell className="tabular-nums">{c.ask.toFixed(2)}</TableCell>
-      <TableCell className="tabular-nums font-medium">{c.mid.toFixed(2)}</TableCell>
-      <TableCell className="tabular-nums text-muted-foreground">{(c.implied_volatility * 100).toFixed(1)}%</TableCell>
-      <TableCell className="tabular-nums">{c.delta.toFixed(2)}</TableCell>
-      <TableCell className="tabular-nums text-destructive">{c.theta.toFixed(3)}</TableCell>
-      <TableCell className="tabular-nums text-muted-foreground">{c.open_interest?.toLocaleString() ?? '—'}</TableCell>
+      <TableCell className={`font-semibold ${highlight ? 'text-primary' : ''} ${c.in_the_money ? 'gain' : ''}`}>${c.strike}</TableCell>
+      <TableCell className="tabular-nums">{c.bid > 0 ? c.bid.toFixed(2) : '—'}</TableCell>
+      <TableCell className="tabular-nums">{c.ask > 0 ? c.ask.toFixed(2) : '—'}</TableCell>
+      <TableCell className="tabular-nums font-medium">{c.mid > 0 ? c.mid.toFixed(2) : '—'}</TableCell>
       <TableCell className="tabular-nums text-muted-foreground">{c.volume?.toLocaleString() ?? '—'}</TableCell>
+      <TableCell className="tabular-nums text-muted-foreground">{c.in_the_money ? <span className="gain text-[10px]">ITM</span> : <span className="text-muted-foreground text-[10px]">OTM</span>}</TableCell>
     </TableRow>
   );
 
@@ -149,20 +146,17 @@ export default function OptionsChain() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Strike</TableHead>
-                      <TableHead>Bid</TableHead>
-                      <TableHead>Ask</TableHead>
-                      <TableHead>Mid</TableHead>
-                      <TableHead>IV</TableHead>
-                      <TableHead>Delta</TableHead>
-                      <TableHead>Theta</TableHead>
-                      <TableHead>OI</TableHead>
-                      <TableHead>Vol</TableHead>
+                      <TableHead>Prev Open</TableHead>
+                      <TableHead>Prev Close</TableHead>
+                      <TableHead>VWAP</TableHead>
+                      <TableHead>Volume</TableHead>
+                      <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {chain.calls
                       .filter(c => expiration ? c.expiration === expiration : true)
-                      .map(c => contractRow(c, Math.abs(c.delta - 0.5) < 0.05))}
+                      .map(c => contractRow(c, Math.abs(c.strike - chain.price) < 3))}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -175,14 +169,11 @@ export default function OptionsChain() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Strike</TableHead>
-                      <TableHead>Bid</TableHead>
-                      <TableHead>Ask</TableHead>
-                      <TableHead>Mid</TableHead>
-                      <TableHead>IV</TableHead>
-                      <TableHead>Delta</TableHead>
-                      <TableHead>Theta</TableHead>
-                      <TableHead>OI</TableHead>
-                      <TableHead>Vol</TableHead>
+                      <TableHead>Prev Open</TableHead>
+                      <TableHead>Prev Close</TableHead>
+                      <TableHead>VWAP</TableHead>
+                      <TableHead>Volume</TableHead>
+                      <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
