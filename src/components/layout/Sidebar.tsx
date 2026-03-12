@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Search, Link2, BookOpen, BarChart2, Menu, X, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, Search, Link2, BookOpen, BarChart2, Bot, Menu, X, TrendingUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/chain', label: 'Options Chain', icon: Link2 },
   { to: '/journal', label: 'Trade Journal', icon: BookOpen },
   { to: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { to: '/auto', label: 'Auto Trader', icon: Bot },
 ];
 
 export default function Sidebar() {

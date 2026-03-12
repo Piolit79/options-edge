@@ -7,6 +7,7 @@ import Screener from './pages/Screener';
 import OptionsChain from './pages/OptionsChain';
 import TradeJournal from './pages/TradeJournal';
 import Analytics from './pages/Analytics';
+import AutoTrader from './pages/AutoTrader';
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ export default function App() {
             <Route path="/chain" element={<OptionsChain />} />
             <Route path="/journal" element={<TradeJournal />} />
             <Route path="/analytics" element={<Analytics />} />
+            <Route path="/auto" element={<AutoTrader />} />
           </Route>
         </Routes>
       </BrowserRouter>
