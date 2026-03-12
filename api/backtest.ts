@@ -209,7 +209,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     sectors        = 'tier1',
     days           = '365',
     starting_balance = '10000',
-    risk_per_trade = 'conviction',   // 'conviction' | fixed pct string e.g. '2'
+    risk_per_trade = 'contracts',    // 'contracts' | 'conviction' | fixed pct string e.g. '2'
     profit_target  = '75',
     stop_loss      = '35',
     trailing       = 'true',
@@ -217,9 +217,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     trail_trigger  = '25',
     min_conviction = '2',
     cooldown_days  = '15',
-    risk_score3    = '5',   // % of balance to risk on score-3 setups
-    risk_score2    = '3',   // % of balance to risk on score-2 setups
-    risk_score1    = '1',   // % of balance to risk on score-1 setups
+    risk_score3    = '5',   // % of balance to risk on score-3 setups (conviction mode)
+    risk_score2    = '3',   // % of balance to risk on score-2 setups (conviction mode)
+    risk_score1    = '1',   // % of balance to risk on score-1 setups (conviction mode)
+    contracts_score3 = '3', // fixed contracts for score-3 setups (contracts mode)
+    contracts_score2 = '2', // fixed contracts for score-2 setups (contracts mode)
+    contracts_score1 = '1', // fixed contracts for score-1 setups (contracts mode)
     max_contracts  = '20',  // hard cap — no single trade buys more than this
   } = req.query as Record<string, string>;
 
@@ -300,16 +303,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .toISOString().split('T')[0];
         const optionSymbol = buildOCCSymbol(ticker, expirationDate, strike);
 
-        // Position sizing — conviction mode uses per-score risk %, fixed uses one flat %
-        const riskFraction = risk_per_trade === 'conviction'
-          ? (convictionRisk[sig.score] ?? 0.02)
-          : parseFloat(risk_per_trade) / 100;
-        const capitalRisked   = balance * riskFraction;
+        // Position sizing
         const costPerContract = entryOptionPrice * 100;
-        const contracts       = Math.min(
-          maxContractsCap,
-          Math.max(1, Math.floor(capitalRisked / costPerContract))
-        );
+        let contracts: number;
+        let capitalRisked: number;
+
+        if (risk_per_trade === 'contracts') {
+          // Fixed contracts per score — always delivers more contracts for better setups
+          const fixedMap: Record<number, number> = {
+            3: parseInt(contracts_score3),
+            2: parseInt(contracts_score2),
+            1: parseInt(contracts_score1),
+          };
+          contracts = Math.min(maxContractsCap, Math.max(1, fixedMap[sig.score] ?? 1));
+          capitalRisked = contracts * costPerContract;
+        } else {
+          // % of balance (conviction or fixed flat %)
+          const riskFraction = risk_per_trade === 'conviction'
+            ? (convictionRisk[sig.score] ?? 0.02)
+            : parseFloat(risk_per_trade) / 100;
+          capitalRisked = balance * riskFraction;
+          contracts = Math.min(maxContractsCap, Math.max(1, Math.floor(capitalRisked / costPerContract)));
+        }
 
         // ── Simulate day-by-day ───────────────────────────────────────────
         let exitDate         = bars[Math.min(i + selectedDte, bars.length - 1)].t;

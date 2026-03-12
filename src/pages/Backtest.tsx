@@ -71,11 +71,14 @@ export default function Backtest() {
   const [selectedSectors, setSelectedSectors] = useState<string[]>(ALL_SECTORS);
   const [days, setDays]                   = useState('365');
   const [startingBalance, setStartingBalance] = useState('10000');
-  const [riskMode, setRiskMode]           = useState<'conviction'|'fixed'>('conviction');
+  const [riskMode, setRiskMode]           = useState<'contracts'|'conviction'|'fixed'>('contracts');
   const [fixedRiskPct, setFixedRiskPct]   = useState('2');
   const [riskScore3, setRiskScore3]       = useState('5');
   const [riskScore2, setRiskScore2]       = useState('3');
   const [riskScore1, setRiskScore1]       = useState('1');
+  const [contractsScore3, setContractsScore3] = useState('3');
+  const [contractsScore2, setContractsScore2] = useState('2');
+  const [contractsScore1, setContractsScore1] = useState('1');
   const [maxContracts, setMaxContracts]   = useState('20');
   const [profitTarget, setProfitTarget]   = useState('75');
   const [stopLoss, setStopLoss]           = useState('35');
@@ -107,7 +110,8 @@ export default function Backtest() {
         : selectedSectors.join(',');
       const params = new URLSearchParams({
         sectors, days, starting_balance: startingBalance,
-        risk_per_trade: riskMode === 'conviction' ? 'conviction' : fixedRiskPct,
+        risk_per_trade: riskMode === 'contracts' ? 'contracts' : riskMode === 'conviction' ? 'conviction' : fixedRiskPct,
+        contracts_score3: contractsScore3, contracts_score2: contractsScore2, contracts_score1: contractsScore1,
         profit_target: profitTarget, stop_loss: stopLoss,
         trailing: useTrailing ? 'true' : 'false',
         trail_trigger: trailTrigger, trail_pct: trailPct,
@@ -209,26 +213,49 @@ export default function Backtest() {
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] text-muted-foreground">Risk Per Trade</label>
+              <label className="text-[11px] text-muted-foreground">Position Sizing Mode</label>
               <div className="flex gap-2 flex-wrap">
-                <button onClick={() => setRiskMode('conviction')}
-                  className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'conviction' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
-                  By Conviction
-                </button>
-                <button onClick={() => setRiskMode('fixed')}
-                  className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'fixed' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
-                  Fixed %
-                </button>
+                {([
+                  ['contracts', 'Fixed Contracts per Score'],
+                  ['conviction', '% of Balance per Score'],
+                  ['fixed', 'Flat % Every Trade'],
+                ] as const).map(([mode, label]) => (
+                  <button key={mode} onClick={() => setRiskMode(mode)}
+                    className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === mode ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
+                    {label}
+                  </button>
+                ))}
               </div>
+
+              {riskMode === 'contracts' && (
+                <div className="grid grid-cols-3 gap-3 pt-1">
+                  {[
+                    { label: 'Score 3 — Best Setup', value: contractsScore3, set: setContractsScore3, color: 'text-green-400', unit: 'contracts' },
+                    { label: 'Score 2 — Good Setup',  value: contractsScore2, set: setContractsScore2, color: 'text-yellow-400', unit: 'contracts' },
+                    { label: 'Score 1 — Marginal',    value: contractsScore1, set: setContractsScore1, color: 'text-muted-foreground', unit: 'contracts' },
+                  ].map(({ label, value, set, color, unit }) => (
+                    <div key={label} className="space-y-1">
+                      <label className={`text-[11px] font-medium ${color}`}>{label}</label>
+                      <div className="flex items-center gap-1">
+                        <Input type="number" value={value} onChange={e => set(e.target.value)} className="h-8 text-sm" />
+                        <span className="text-xs text-muted-foreground">{unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="col-span-3 text-[10px] text-muted-foreground">
+                    Best setups always buy more contracts regardless of account size
+                  </p>
+                </div>
+              )}
               {riskMode === 'conviction' && (
                 <div className="grid grid-cols-3 gap-3 pt-1">
                   {[
-                    { label: 'Score 3 % (best setup)', value: riskScore3, set: setRiskScore3, color: 'text-green-400' },
-                    { label: 'Score 2 % (good setup)',  value: riskScore2, set: setRiskScore2, color: 'text-yellow-400' },
-                    { label: 'Score 1 % (marginal)',    value: riskScore1, set: setRiskScore1, color: 'text-muted-foreground' },
+                    { label: 'Score 3 % (best)', value: riskScore3, set: setRiskScore3, color: 'text-green-400' },
+                    { label: 'Score 2 % (good)',  value: riskScore2, set: setRiskScore2, color: 'text-yellow-400' },
+                    { label: 'Score 1 % (marginal)', value: riskScore1, set: setRiskScore1, color: 'text-muted-foreground' },
                   ].map(({ label, value, set, color }) => (
                     <div key={label} className="space-y-1">
-                      <label className={`text-[11px] ${color}`}>{label}</label>
+                      <label className={`text-[11px] font-medium ${color}`}>{label}</label>
                       <div className="flex items-center gap-1">
                         <Input type="number" value={value} onChange={e => set(e.target.value)} className="h-8 text-sm" />
                         <span className="text-xs text-muted-foreground">%</span>
@@ -236,14 +263,14 @@ export default function Backtest() {
                     </div>
                   ))}
                   <p className="col-span-3 text-[10px] text-muted-foreground">
-                    % of current balance risked per trade · more contracts bought automatically as balance grows
+                    % of current balance · scales automatically as account grows
                   </p>
                 </div>
               )}
               {riskMode === 'fixed' && (
                 <div className="flex items-center gap-2 pt-1">
                   <Input type="number" value={fixedRiskPct} onChange={e => setFixedRiskPct(e.target.value)} className="h-8 w-20 text-sm" />
-                  <span className="text-xs text-muted-foreground">% of balance on every trade</span>
+                  <span className="text-xs text-muted-foreground">% of balance on every trade regardless of score</span>
                 </div>
               )}
             </div>
