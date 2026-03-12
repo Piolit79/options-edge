@@ -8,6 +8,7 @@ import OptionsChain from './pages/OptionsChain';
 import TradeJournal from './pages/TradeJournal';
 import Analytics from './pages/Analytics';
 import AutoTrader from './pages/AutoTrader';
+import Backtest from './pages/Backtest';
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/journal" element={<TradeJournal />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/auto" element={<AutoTrader />} />
+            <Route path="/backtest" element={<Backtest />} />
           </Route>
         </Routes>
       </BrowserRouter>

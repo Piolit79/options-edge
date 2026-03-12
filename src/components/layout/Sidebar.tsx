@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Search, Link2, BookOpen, BarChart2, Bot, Menu, X, TrendingUp } from 'lucide-react';
+import { LayoutDashboard, Search, Link2, BookOpen, BarChart2, Bot, Menu, X, TrendingUp, FlaskConical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -11,6 +11,7 @@ const navItems = [
   { to: '/journal', label: 'Trade Journal', icon: BookOpen },
   { to: '/analytics', label: 'Analytics', icon: BarChart2 },
   { to: '/auto', label: 'Auto Trader', icon: Bot },
+  { to: '/backtest', label: 'Backtest', icon: FlaskConical },
 ];
 
 export default function Sidebar() {
