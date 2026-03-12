@@ -63,13 +63,13 @@ function detectSignal(
   const ma20       = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
   const ma50       = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
   const ma200      = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
-  // MA50 from 20 bars ago — confirms the 50-day is trending UP, not flat/declining
+  // MA50 from 20 bars ago — confirms the 50-day is trending UP, not rolling over
   const ma50_20ago = closes.slice(-70, -20).reduce((a, b) => a + b, 0) / 50;
-  const ma50Rising = ma50 > ma50_20ago * 1.001;
+  const ma50Rising = ma50 > ma50_20ago;  // no noise threshold — just must be rising
   const high52     = Math.max(...closes.slice(-252));
   const rsi        = calcRSI(closes.slice(-16));
-  // RSI 3 bars ago — confirms dip is exhausted and momentum is starting to reverse
-  const rsiPrev    = calcRSI(closes.slice(-19, -3));
+  // RSI 3 bars ago — used only for dip confirmation (not all signals)
+  const rsiPrev      = calcRSI(closes.slice(-19, -3));
   const rsiTurningUp = rsi > rsiPrev;
   const above20    = price > ma20;
   const above50    = price > ma50;
@@ -81,33 +81,33 @@ function detectSignal(
   const lastVol      = volumes[volumes.length - 1];
   const distFromMa50 = Math.abs(price - ma50) / ma50 * 100;
 
-  // 1. Momentum Dip — pullback in strong uptrend, RSI starting to turn back up
+  // 1. Momentum Dip — pullback in strong uptrend, RSI turning up confirms bottom
   if (above50 && above200 && ma50Rising &&
-      rsi < 38 && rsiTurningUp &&
-      dipPct >= 4 && dipPct <= 12 &&
-      lastVol < avgVol20 * 1.5 &&     // sellers fading
-      price > high52 * 0.80)
+      rsi < 40 && rsiTurningUp &&
+      dipPct >= 3 && dipPct <= 15 &&
+      lastVol < avgVol20 * 2.0 &&     // sellers fading (not panic selling)
+      price > high52 * 0.78)
     return { signal: 'momentum_dip', score: 3 };
 
-  // 2. MA50 Support — bounce off key support with MA50 trending up
+  // 2. MA50 Support — price pulls back to rising 50-day, RSI mid-range
   if (above200 && above50 && ma50Rising &&
-      distFromMa50 <= 2.0 &&
-      rsi >= 32 && rsi <= 52 && rsiTurningUp &&
-      price > high52 * 0.75)
+      distFromMa50 <= 3.0 &&          // within 3% of MA50
+      rsi >= 30 && rsi <= 55 &&
+      price > high52 * 0.72)
     return { signal: 'ma50_support', score: 3 };
 
-  // 3. Oversold in Uptrend — deep RSI reset with reversal confirmation
+  // 3. Oversold in Uptrend — deep RSI reset in an established uptrend
   if (above50 && above200 && ma50Rising &&
-      rsi < 30 && rsiTurningUp &&
-      price > high52 * 0.80)
+      rsi < 33 &&
+      price > high52 * 0.78)
     return { signal: 'oversold_uptrend', score: 2 };
 
-  // 4. Breakout — new 20-day high on strong volume, all MAs aligned
+  // 4. Breakout — new 20-day high on meaningful volume, all MAs aligned
   const high20prev = Math.max(...closes.slice(-21, -1));
   if (above20 && above50 && above200 &&
       price > high20prev &&
-      lastVol > avgVol20 * 2.0 &&
-      rsi > 52 && rsi < 70)
+      lastVol > avgVol20 * 1.7 &&
+      rsi > 50 && rsi < 72)
     return { signal: 'breakout', score: 2 };
 
   return null;

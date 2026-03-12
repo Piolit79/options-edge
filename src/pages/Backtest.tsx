@@ -38,10 +38,10 @@ const SIGNAL_LABELS: Record<string, string> = {
   breakout:        'Breakout',
 };
 const SIGNAL_DESCRIPTIONS: Record<string, string> = {
-  momentum_dip:    'Above MA50+MA200, RSI<38, pulled back 4–12% on fading volume, within 20% of 52w high',
-  ma50_support:    'Price touches MA50 from above (within 1.5%), RSI 35–52 — classic buy-the-dip-at-support',
-  oversold_uptrend:'Above MA50+MA200, RSI<32, within 20% of 52w high — deep oversold in uptrend',
-  breakout:        'Above MA50+MA200, new 20-day high on 2x volume, RSI 50–70 — momentum continuation',
+  momentum_dip:    'Above MA50+MA200 (rising), RSI<40 turning up, pulled back 3–15% on fading volume, near 52w high',
+  ma50_support:    'Price pulls back to rising MA50 (within 3%), RSI 30–55 — classic buy-the-dip-at-support',
+  oversold_uptrend:'Above MA50+MA200 (rising), RSI<33 — deep oversold reset in an established uptrend',
+  breakout:        'All MAs aligned, new 20-day high on 1.7x+ volume, RSI 50–72 — momentum continuation',
 };
 const CLOSE_COLORS: Record<string, string> = {
   profit_target: 'text-green-400', trailing_stop: 'text-blue-400',
