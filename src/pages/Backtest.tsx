@@ -492,6 +492,8 @@ export default function Backtest() {
                     <tr className="border-b border-border/50 text-muted-foreground">
                       <th className="text-left px-3 py-2">Stock</th>
                       <th className="text-left px-3 py-2">Setup</th>
+                      <th className="text-right px-3 py-2">Qty</th>
+                      <th className="text-right px-3 py-2">Total In</th>
                       <th className="text-left px-3 py-2">Contract</th>
                       <th className="text-right px-3 py-2">DTE</th>
                       <th className="text-left px-3 py-2">Entry</th>
@@ -499,12 +501,11 @@ export default function Backtest() {
                       <th className="text-right px-3 py-2">Days</th>
                       <th className="text-right px-3 py-2">Stock $</th>
                       <th className="text-right px-3 py-2">Strike</th>
-                      <th className="text-right px-3 py-2 text-primary">Contract Buy</th>
+                      <th className="text-right px-3 py-2 text-primary">Buy/ct</th>
                       <th className="text-right px-3 py-2 text-muted-foreground">Peak</th>
-                      <th className="text-right px-3 py-2 text-primary">Contract Sell</th>
-                      <th className="text-right px-3 py-2">Contracts</th>
+                      <th className="text-right px-3 py-2 text-primary">Sell/ct</th>
                       <th className="text-right px-3 py-2">P&L %</th>
-                      <th className="text-right px-3 py-2">P&L $</th>
+                      <th className="text-right px-3 py-2">P&L $ (total)</th>
                       <th className="text-right px-3 py-2">Exit</th>
                     </tr>
                   </thead>
@@ -513,6 +514,10 @@ export default function Backtest() {
                       <tr key={i} className="hover:bg-muted/20">
                         <td className="px-3 py-1.5 font-semibold">{t.ticker}</td>
                         <td className="px-3 py-1.5"><Badge variant="outline" className="text-[9px]">{SIGNAL_LABELS[t.signal] ?? t.signal}</Badge></td>
+                        <td className="px-3 py-1.5 tabular-nums text-right font-bold">{t.contracts}</td>
+                        <td className="px-3 py-1.5 tabular-nums text-right text-muted-foreground">
+                          ${(t.entryOptionPrice * t.contracts * 100).toLocaleString('en', {maximumFractionDigits: 0})}
+                        </td>
                         <td className="px-3 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">{t.optionSymbol}</td>
                         <td className="px-3 py-1.5 tabular-nums text-right">{t.dte}d</td>
                         <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{t.entryDate}</td>
@@ -523,11 +528,10 @@ export default function Backtest() {
                         <td className="px-3 py-1.5 tabular-nums text-right font-medium text-primary">${t.entryOptionPrice.toFixed(2)}</td>
                         <td className="px-3 py-1.5 tabular-nums text-right text-muted-foreground">${t.peakOptionPrice.toFixed(2)}</td>
                         <td className="px-3 py-1.5 tabular-nums text-right font-medium text-primary">${t.exitOptionPrice.toFixed(2)}</td>
-                        <td className="px-3 py-1.5 tabular-nums text-right">{t.contracts}</td>
                         <td className={`px-3 py-1.5 tabular-nums text-right font-semibold ${t.pnlPct > 0 ? 'gain' : t.pnlPct < 0 ? 'loss' : ''}`}>
                           {t.pnlPct > 0 ? '+' : ''}{t.pnlPct.toFixed(1)}%
                         </td>
-                        <td className={`px-3 py-1.5 tabular-nums text-right font-semibold ${t.pnlDollars > 0 ? 'gain' : t.pnlDollars < 0 ? 'loss' : ''}`}>
+                        <td className={`px-3 py-1.5 tabular-nums text-right font-bold text-base ${t.pnlDollars > 0 ? 'gain' : t.pnlDollars < 0 ? 'loss' : ''}`}>
                           {fmt(t.pnlDollars)}
                         </td>
                         <td className={`px-3 py-1.5 text-right ${CLOSE_COLORS[t.closeReason]}`}>
