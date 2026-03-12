@@ -16,7 +16,7 @@ function normalCDF(x: number): number {
 }
 
 function bsCall(S: number, K: number, T: number, sigma: number, r = 0.045): number {
-  if (T <= 0) return Math.max(S - K, 0);
+  if (T <= 0 || S <= 0 || K <= 0 || sigma <= 0) return Math.max(S - K, 0);
   const sqrtT = Math.sqrt(T);
   const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
   const d2 = d1 - sigma * sqrtT;
@@ -36,8 +36,6 @@ function annualVol(closes: number[], window = 30): number {
   return Math.sqrt(variance * 252);
 }
 
-// ── Improved signal detection ────────────────────────────────────────────────
-// Tighter criteria vs v1 + market regime filter (spyAboveMa50)
 function calcRSI(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50;
   const gains: number[] = [], losses: number[] = [];
@@ -52,128 +50,127 @@ function calcRSI(closes: number[], period = 14): number {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
+// ── Signal detection ─────────────────────────────────────────────────────────
 function detectSignal(
   closes: number[],
   volumes: number[],
   spyAboveMa50: boolean,
 ): { signal: string; score: number } | null {
   if (closes.length < 201) return null;
+  if (!spyAboveMa50) return null;  // market regime gate
 
-  const price  = closes[closes.length - 1];
-  const prev1  = closes[closes.length - 2];
-  const ma50   = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
-  const ma200  = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
-  const high52 = Math.max(...closes.slice(-252));
-  const rsi    = calcRSI(closes.slice(-16));
-
+  const price    = closes[closes.length - 1];
+  const ma50     = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+  const ma200    = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
+  const high52   = Math.max(...closes.slice(-252));
+  const rsi      = calcRSI(closes.slice(-16));
   const above50  = price > ma50;
   const above200 = price > ma200;
-  // Only trade long calls when broad market is in an uptrend
-  if (!spyAboveMa50) return null;
 
   const recentHigh10 = Math.max(...closes.slice(-10));
-  const dipPct = ((recentHigh10 - price) / recentHigh10) * 100;
+  const dipPct       = ((recentHigh10 - price) / recentHigh10) * 100;
+  const avgVol20     = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const lastVol      = volumes[volumes.length - 1];
+  const distFromMa50 = Math.abs(price - ma50) / ma50 * 100;
 
-  const avgVol20 = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-  const lastVol  = volumes[volumes.length - 1];
+  // 1. Momentum Dip — best setup, high conviction
+  if (above50 && above200 && rsi < 38 &&
+      dipPct >= 4 && dipPct <= 12 &&
+      lastVol < avgVol20 * 1.5 &&     // sellers fading
+      price > high52 * 0.80)
+    return { signal: 'momentum_dip', score: 3 };
 
-  // ── Momentum Dip (best setup) ─────────────────────────────────────────────
-  // Requirements: strong uptrend, fresh RSI oversold, dip is 4-12% (not a collapse),
-  // dip volume not surging (institutional buying, not panic selling),
-  // still within 20% of 52w high (the trend is intact)
-  if (
-    above50 && above200 &&
-    rsi < 38 &&
-    dipPct >= 4 && dipPct <= 12 &&
-    lastVol < avgVol20 * 1.5 &&        // volume fading = selling exhaustion
-    price > high52 * 0.80              // still within 20% of year high
-  ) return { signal: 'momentum_dip', score: 3 };
+  // 2. Pullback to MA50 — reliable support touch in uptrend
+  // Price comes within 1.5% of MA50 from above, RSI 35-50, still in long-term uptrend
+  if (above200 && above50 &&
+      distFromMa50 <= 1.5 &&
+      rsi >= 35 && rsi <= 52 &&
+      price > high52 * 0.75)
+    return { signal: 'ma50_support', score: 3 };
 
-  // ── Oversold in Uptrend ───────────────────────────────────────────────────
-  // Deeper oversold RSI, still in uptrend, within 20% of high
-  if (
-    above50 && above200 &&
-    rsi < 32 &&
-    price > high52 * 0.80
-  ) return { signal: 'oversold_uptrend', score: 2 };
+  // 3. Oversold in Uptrend — deeper pullback but trend intact
+  if (above50 && above200 && rsi < 32 && price > high52 * 0.80)
+    return { signal: 'oversold_uptrend', score: 2 };
 
-  // ── Breakout ──────────────────────────────────────────────────────────────
-  // New 20-day high on strong volume, RSI in healthy momentum zone (not overbought)
+  // 4. Breakout — new 20-day high on strong volume
   const high20prev = Math.max(...closes.slice(-21, -1));
-  if (
-    above50 && above200 &&
-    price > high20prev &&
-    lastVol > avgVol20 * 2.0 &&        // strong volume confirmation (raised from 1.5x)
-    rsi > 50 && rsi < 70              // healthy momentum, not overbought
-  ) return { signal: 'breakout', score: 2 };
+  if (above50 && above200 &&
+      price > high20prev &&
+      lastVol > avgVol20 * 2.0 &&
+      rsi > 50 && rsi < 70)
+    return { signal: 'breakout', score: 2 };
 
   return null;
 }
 
-// ── Fetch historical bars from Polygon ───────────────────────────────────────
-async function fetchBars(ticker: string, days: number): Promise<{ c: number; v: number; t: string }[]> {
+// ── Fetch bars (OHLCV) ───────────────────────────────────────────────────────
+interface Bar { o: number; h: number; l: number; c: number; v: number; t: string; }
+
+async function fetchBars(ticker: string, days: number): Promise<Bar[]> {
   const from = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
   const to   = new Date().toISOString().split('T')[0];
   const url  = `${POLYGON}/v2/aggs/ticker/${ticker}/range/1/day/${from}/${to}?limit=1000&apiKey=${POLYGON_KEY}`;
   const r = await fetch(url);
   const d = await r.json();
-  return (d.results ?? []).map((b: any) => ({ c: b.c, v: b.v, t: new Date(b.t).toISOString().split('T')[0] }));
+  return (d.results ?? []).map((b: any) => ({
+    o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+    t: new Date(b.t).toISOString().split('T')[0],
+  }));
 }
 
+const CONVICTION_RISK: Record<number, number> = { 3: 0.03, 2: 0.02, 1: 0.01 };
+
 export interface BacktestTrade {
-  ticker: string;
-  signal: string;
-  score: number;
-  entryDate: string;
-  exitDate: string;
-  daysHeld: number;
-  stockEntryPrice: number;
-  strike: number;
-  entryOptionPrice: number;
-  exitOptionPrice: number;
-  peakOptionPrice: number;     // highest price the option reached
-  pnlPct: number;
-  pnlDollars: number;
+  ticker: string; signal: string; score: number;
+  entryDate: string; exitDate: string; daysHeld: number;
+  stockEntryPrice: number; strike: number;
+  entryOptionPrice: number; exitOptionPrice: number; peakOptionPrice: number;
+  contracts: number; capitalRisked: number;
+  pnlPct: number; pnlDollars: number;
   closeReason: 'profit_target' | 'trailing_stop' | 'stop_loss' | 'expired';
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const {
-    sectors      = 'tier1',
-    days         = '365',
-    profit_target = '50',
-    stop_loss    = '35',
-    trailing     = 'true',    // trailing stop on by default
-    trail_pct    = '25',      // trail 25% below peak once in profit
-    trail_trigger = '25',     // start trailing once up 25%
+    sectors        = 'tier1',
+    days           = '365',
+    starting_balance = '10000',
+    risk_per_trade = 'conviction',   // 'conviction' | fixed pct string e.g. '2'
+    profit_target  = '75',
+    stop_loss      = '35',
+    trailing       = 'true',
+    trail_pct      = '25',
+    trail_trigger  = '25',
     min_conviction = '2',
-    dte          = '45',
+    dte            = '45',
+    cooldown_days  = '15',
   } = req.query as Record<string, string>;
 
-  // Resolve ticker list from universe
+  // Ticker universe
   let tickerList: string[];
-  if (sectors === 'tier1') {
-    tickerList = TIER1_TICKERS;
-  } else if (sectors === 'all') {
-    tickerList = Object.values(UNIVERSE).flat();
-  } else {
-    const sectorList = sectors.split(',').map(s => s.trim());
-    tickerList = sectorList.flatMap(s => UNIVERSE[s] ?? []);
+  if (sectors === 'tier1') tickerList = TIER1_TICKERS;
+  else if (sectors === 'all') tickerList = Object.values(UNIVERSE).flat();
+  else {
+    tickerList = sectors.split(',').flatMap(s => UNIVERSE[s.trim()] ?? []);
     if (!tickerList.length) tickerList = TIER1_TICKERS;
   }
 
-  const daysBack      = parseInt(days);
-  const profitTarget  = parseFloat(profit_target) / 100;
-  const stopLoss      = parseFloat(stop_loss) / 100;
-  const useTrailing   = trailing === 'true';
-  const trailPct      = parseFloat(trail_pct) / 100;      // e.g. 0.25 = trail 25% below peak
-  const trailTrigger  = parseFloat(trail_trigger) / 100;  // e.g. 0.25 = start trailing at +25%
-  const minConviction = parseInt(min_conviction);
-  const targetDte     = parseInt(dte);
+  const daysBack       = parseInt(days);
+  const balance0       = parseFloat(starting_balance);
+  const profitTarget   = parseFloat(profit_target) / 100;
+  const stopLoss       = parseFloat(stop_loss) / 100;
+  const useTrailing    = trailing !== 'false';
+  const trailPct       = parseFloat(trail_pct) / 100;
+  const trailTrigger   = parseFloat(trail_trigger) / 100;
+  const minConviction  = parseInt(min_conviction);
+  const targetDte      = parseInt(dte);
+  const cooldown       = parseInt(cooldown_days);
 
-  // Fetch SPY first for market regime filter
-  const spyBars = await fetchBars('SPY', daysBack + 300).catch(() => [] as { c: number; v: number; t: string }[]);
+  // Fetch SPY for regime filter
+  const spyBars = await fetchBars('SPY', daysBack + 300).catch(() => [] as Bar[]);
 
+  // Running balance (compounding)
+  let balance = balance0;
   const allTrades: BacktestTrade[] = [];
 
   for (const ticker of tickerList) {
@@ -184,27 +181,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let lastEntryIdx = -999;
 
       for (let i = 200; i < bars.length; i++) {
-        // Only scan bars within the requested date range
         const barDate = bars[i].t;
         const cutoff  = new Date(Date.now() - daysBack * 86400000).toISOString().split('T')[0];
         if (barDate < cutoff) continue;
 
+        // SPY regime
+        const spyIdx = spyBars.findIndex(b => b.t >= barDate);
+        const spyCloses = spyIdx >= 50 ? spyBars.slice(0, spyIdx + 1).map(b => b.c) : [];
+        const spyMa50 = spyCloses.length >= 50
+          ? spyCloses.slice(-50).reduce((a, b) => a + b, 0) / 50 : null;
+        const spyAboveMa50 = spyMa50 === null || spyCloses[spyCloses.length - 1] > spyMa50;
+
         const closes  = bars.slice(0, i + 1).map(b => b.c);
         const volumes = bars.slice(0, i + 1).map(b => b.v);
 
-        // Market regime: is SPY above its 50-day MA on this date?
-        const spyIdx = spyBars.findIndex(b => b.t >= barDate);
-        const spySlice = spyIdx >= 50 ? spyBars.slice(0, spyIdx + 1).map(b => b.c) : [];
-        const spyMa50 = spySlice.length >= 50
-          ? spySlice.slice(-50).reduce((a, b) => a + b, 0) / 50
-          : null;
-        const spyAboveMa50 = spyMa50 === null || spySlice[spySlice.length - 1] > spyMa50;
-
         const sig = detectSignal(closes, volumes, spyAboveMa50);
         if (!sig || sig.score < minConviction) continue;
-
-        // Avoid re-entering within 30 days on same ticker
-        if (i - lastEntryIdx < 30) continue;
+        if (i - lastEntryIdx < cooldown) continue;
         lastEntryIdx = i;
 
         const stockEntryPrice = bars[i].c;
@@ -214,71 +207,90 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const entryOptionPrice = bsCall(stockEntryPrice, strike, T0, sigma);
         if (entryOptionPrice < 0.10) continue;
 
-        // ── Simulate the trade day-by-day ──────────────────────────────────
-        let exitDate        = bars[Math.min(i + targetDte, bars.length - 1)].t;
-        let exitOptionPrice = entryOptionPrice;
-        let peakOptionPrice = entryOptionPrice;
+        // Position sizing
+        const riskFraction = risk_per_trade === 'conviction'
+          ? (CONVICTION_RISK[sig.score] ?? 0.02)
+          : parseFloat(risk_per_trade) / 100;
+        const capitalRisked  = balance * riskFraction;
+        const costPerContract = entryOptionPrice * 100;
+        const contracts      = Math.max(1, Math.floor(capitalRisked / costPerContract));
+
+        // ── Simulate day-by-day ───────────────────────────────────────────
+        let exitDate         = bars[Math.min(i + targetDte, bars.length - 1)].t;
+        let exitOptionPrice  = entryOptionPrice;
+        let peakOptionPrice  = entryOptionPrice;
         let closeReason: BacktestTrade['closeReason'] = 'expired';
-        let daysHeld        = 0;
-        let trailingStopLevel = 0; // 0 = not yet active
+        let daysHeld         = 0;
+        let trailingStop     = 0;
 
         for (let j = i + 1; j < Math.min(i + targetDte + 1, bars.length); j++) {
-          const daysLeft = targetDte - (j - i);
-          const T        = Math.max(daysLeft / 365.25, 0);
-          const futSigma = annualVol(bars.slice(0, j + 1).map(b => b.c));
-          const curPrice = bsCall(bars[j].c, strike, T, futSigma);
-          const curPnlPct = (curPrice - entryOptionPrice) / entryOptionPrice;
+          const daysLeft  = targetDte - (j - i);
+          const T         = Math.max(daysLeft / 365.25, 0);
+          const futSigma  = annualVol(bars.slice(0, j + 1).map(b => b.c));
 
-          // Update peak
-          if (curPrice > peakOptionPrice) peakOptionPrice = curPrice;
+          // Check intraday low first (catches gaps through stop)
+          const intradayLowPrice  = bsCall(bars[j].l, strike, T, futSigma);
+          const intradayHighPrice = bsCall(bars[j].h, strike, T, futSigma);
+          const closePrice        = bsCall(bars[j].c, strike, T, futSigma);
 
-          // Activate / update trailing stop
-          if (useTrailing && curPnlPct >= trailTrigger) {
-            const newStop = peakOptionPrice * (1 - trailPct);
-            trailingStopLevel = Math.max(trailingStopLevel, newStop);
+          if (closePrice > peakOptionPrice) peakOptionPrice = closePrice;
+
+          // Activate/update trailing stop using intraday high (best price of day)
+          if (useTrailing) {
+            const highPnlPct = (intradayHighPrice - entryOptionPrice) / entryOptionPrice;
+            if (highPnlPct >= trailTrigger) {
+              const newStop = intradayHighPrice * (1 - trailPct);
+              trailingStop = Math.max(trailingStop, newStop);
+            }
           }
 
-          // Fixed profit target
-          if (curPnlPct >= profitTarget) {
-            exitDate = bars[j].t; exitOptionPrice = curPrice;
+          // Profit target — check intraday high
+          const highPnlPct = (intradayHighPrice - entryOptionPrice) / entryOptionPrice;
+          if (highPnlPct >= profitTarget) {
+            // Exit at target price, not the high (conservative)
+            const targetPrice = entryOptionPrice * (1 + profitTarget);
+            exitDate = bars[j].t; exitOptionPrice = targetPrice;
             closeReason = 'profit_target'; daysHeld = j - i; break;
           }
 
-          // Trailing stop (only fires if we're still above entry)
-          if (useTrailing && trailingStopLevel > 0 && curPrice <= trailingStopLevel) {
-            exitDate = bars[j].t; exitOptionPrice = curPrice;
+          // Trailing stop — check against intraday low
+          if (useTrailing && trailingStop > 0 && intradayLowPrice <= trailingStop) {
+            exitDate = bars[j].t; exitOptionPrice = trailingStop;
             closeReason = 'trailing_stop'; daysHeld = j - i; break;
           }
 
-          // Hard stop loss
-          if (curPnlPct <= -stopLoss) {
-            exitDate = bars[j].t; exitOptionPrice = curPrice;
+          // Hard stop loss — checked against intraday LOW (realistic: stop hits intraday)
+          const lowPnlPct = (intradayLowPrice - entryOptionPrice) / entryOptionPrice;
+          if (lowPnlPct <= -stopLoss) {
+            exitDate = bars[j].t;
+            exitOptionPrice = entryOptionPrice * (1 - stopLoss); // exit exactly at stop
             closeReason = 'stop_loss'; daysHeld = j - i; break;
           }
 
           if (j === Math.min(i + targetDte, bars.length - 1)) {
-            exitDate = bars[j].t; exitOptionPrice = curPrice;
+            exitDate = bars[j].t; exitOptionPrice = closePrice;
             closeReason = 'expired'; daysHeld = j - i;
           }
         }
 
         const pnlPct    = ((exitOptionPrice - entryOptionPrice) / entryOptionPrice) * 100;
-        const pnlDollars = (exitOptionPrice - entryOptionPrice) * 100;
+        const pnlDollars = (exitOptionPrice - entryOptionPrice) * contracts * 100;
+
+        // Update running balance
+        balance += pnlDollars;
 
         allTrades.push({
-          ticker,
-          signal:          sig.signal,
-          score:           sig.score,
-          entryDate:       barDate,
-          exitDate,
-          daysHeld,
+          ticker, signal: sig.signal, score: sig.score,
+          entryDate: barDate, exitDate, daysHeld,
           stockEntryPrice: Math.round(stockEntryPrice * 100) / 100,
           strike,
-          entryOptionPrice: Math.round(entryOptionPrice * 100) / 100,
-          exitOptionPrice:  Math.round(exitOptionPrice * 100) / 100,
-          peakOptionPrice:  Math.round(peakOptionPrice * 100) / 100,
-          pnlPct:           Math.round(pnlPct * 10) / 10,
-          pnlDollars:       Math.round(pnlDollars * 100) / 100,
+          entryOptionPrice:  Math.round(entryOptionPrice * 100) / 100,
+          exitOptionPrice:   Math.round(exitOptionPrice * 100) / 100,
+          peakOptionPrice:   Math.round(peakOptionPrice * 100) / 100,
+          contracts,
+          capitalRisked:     Math.round(capitalRisked * 100) / 100,
+          pnlPct:    Math.round(pnlPct * 10) / 10,
+          pnlDollars: Math.round(pnlDollars * 100) / 100,
           closeReason,
         });
       }
@@ -289,15 +301,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   allTrades.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
 
-  const winners   = allTrades.filter(t => t.pnlPct > 0);
-  const totalPnL  = allTrades.reduce((s, t) => s + t.pnlDollars, 0);
-  const avgPnL    = allTrades.length ? totalPnL / allTrades.length : 0;
-  const winRate   = allTrades.length ? Math.round((winners.length / allTrades.length) * 100) : 0;
+  const winners    = allTrades.filter(t => t.pnlPct > 0);
+  const totalPnL   = allTrades.reduce((s, t) => s + t.pnlDollars, 0);
+  const finalBal   = balance0 + totalPnL;
+  const winRate    = allTrades.length ? Math.round(winners.length / allTrades.length * 100) : 0;
+  const weeksInPeriod = daysBack / 7;
+  const tradesPerWeek = allTrades.length ? Math.round((allTrades.length / weeksInPeriod) * 10) / 10 : 0;
 
-  // Close reason breakdown
   const byReason = allTrades.reduce((acc, t) => {
-    acc[t.closeReason] = (acc[t.closeReason] ?? 0) + 1;
-    return acc;
+    acc[t.closeReason] = (acc[t.closeReason] ?? 0) + 1; return acc;
   }, {} as Record<string, number>);
 
   const bySignal = allTrades.reduce((acc, t) => {
@@ -308,17 +320,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return acc;
   }, {} as Record<string, { trades: number; wins: number; pnl: number }>);
 
+  // Build equity curve (chronological)
+  let running = balance0;
+  const equityCurve = allTrades.map(t => {
+    running += t.pnlDollars;
+    return { date: t.exitDate, balance: Math.round(running * 100) / 100, ticker: t.ticker };
+  });
+
   res.json({
     summary: {
+      startingBalance: balance0,
+      finalBalance: Math.round(finalBal * 100) / 100,
+      totalPnL: Math.round(totalPnL * 100) / 100,
+      totalReturn: Math.round((totalPnL / balance0) * 1000) / 10,
       totalTrades: allTrades.length,
+      tradesPerWeek,
       winRate,
-      totalPnL:  Math.round(totalPnL * 100) / 100,
-      avgPnL:    Math.round(avgPnL * 100) / 100,
+      avgPnL: allTrades.length ? Math.round(totalPnL / allTrades.length * 100) / 100 : 0,
       bestTrade:  allTrades.length ? Math.max(...allTrades.map(t => t.pnlPct)) : 0,
       worstTrade: allTrades.length ? Math.min(...allTrades.map(t => t.pnlPct)) : 0,
       bySignal,
       byReason,
     },
+    equityCurve,
     trades: allTrades,
   });
 }
