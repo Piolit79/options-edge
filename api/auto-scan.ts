@@ -48,37 +48,49 @@ function calcRSI(closes: number[], period = 14): number {
   return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-async function scoreTickerSignal(ticker: string): Promise<{ signal: string; score: number; price: number } | null> {
+async function scoreTickerSignal(
+  ticker: string,
+  spyMa50: number | null,
+): Promise<{ signal: string; score: number; price: number } | null> {
   const today = new Date().toISOString().split('T')[0];
-  const yearAgo = new Date(Date.now() - 365 * 864e5).toISOString().split('T')[0];
+  const yearAgo = new Date(Date.now() - 400 * 864e5).toISOString().split('T')[0];
 
   const histRes = await fetch(
-    `${POLYGON}/v2/aggs/ticker/${ticker}/range/1/day/${yearAgo}/${today}?limit=300&apiKey=${POLYGON_KEY}`
+    `${POLYGON}/v2/aggs/ticker/${ticker}/range/1/day/${yearAgo}/${today}?limit=500&apiKey=${POLYGON_KEY}`
   );
   const hist = await histRes.json();
   const bars = hist.results ?? [];
-  if (bars.length < 50) return null;
+  if (bars.length < 201) return null;
 
   const closes: number[] = bars.map((b: any) => b.c);
+  const volumes: number[] = bars.map((b: any) => b.v);
   const latest = bars[bars.length - 1];
 
-  const ma50 = closes.slice(-50).reduce((a: number, b: number) => a + b, 0) / 50;
-  const ma200 = closes.length >= 200 ? closes.slice(-200).reduce((a: number, b: number) => a + b, 0) / 200 : null;
-  const rsi = calcRSI(closes.slice(-15));
-  const above50 = latest.c > ma50;
-  const above200 = ma200 ? latest.c > ma200 : true;
-  const recentHigh = Math.max(...closes.slice(-10));
-  const dip = ((recentHigh - latest.c) / recentHigh) * 100;
-  const avgVol = bars.slice(-20).reduce((a: any, b: any) => a + b.v, 0) / 20;
+  // Market regime filter — only go long when SPY is above its 50-day MA
+  if (spyMa50 !== null && latest.c < spyMa50) return null;
+
+  const ma50   = closes.slice(-50).reduce((a, b) => a + b, 0) / 50;
+  const ma200  = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
+  const high52 = Math.max(...closes.slice(-252));
+  const rsi    = calcRSI(closes.slice(-16));
+  const above50  = latest.c > ma50;
+  const above200 = latest.c > ma200;
+
+  const recentHigh10 = Math.max(...closes.slice(-10));
+  const dip          = ((recentHigh10 - latest.c) / recentHigh10) * 100;
+  const avgVol20     = volumes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const lastVol      = volumes[volumes.length - 1];
 
   let signal = 'none';
   let score = 0;
 
-  if (above50 && above200 && rsi < 40 && dip > 3) {
+  if (above50 && above200 && rsi < 38 && dip >= 4 && dip <= 12 &&
+      lastVol < avgVol20 * 1.5 && latest.c > high52 * 0.80) {
     signal = 'momentum_dip'; score = 3;
-  } else if (above50 && above200 && rsi < 35) {
+  } else if (above50 && above200 && rsi < 32 && latest.c > high52 * 0.80) {
     signal = 'oversold_uptrend'; score = 2;
-  } else if (above50 && latest.c > Math.max(...closes.slice(-20, -1)) && latest.v > avgVol * 1.5) {
+  } else if (above50 && above200 && latest.c > Math.max(...closes.slice(-21, -1)) &&
+             lastVol > avgVol20 * 2.0 && rsi > 50 && rsi < 70) {
     signal = 'breakout'; score = 2;
   }
 
@@ -161,6 +173,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const minConviction = parseInt(settings.min_conviction ?? '2');
     const isSimulation = settings.mode !== 'live';
 
+    // Fetch SPY MA50 for market regime filter
+    const today = new Date().toISOString().split('T')[0];
+    const spyFrom = new Date(Date.now() - 80 * 864e5).toISOString().split('T')[0];
+    let spyMa50: number | null = null;
+    try {
+      const spyRes = await fetch(`${POLYGON}/v2/aggs/ticker/SPY/range/1/day/${spyFrom}/${today}?limit=100&apiKey=${POLYGON_KEY}`);
+      const spyData = await spyRes.json();
+      const spyCloses: number[] = (spyData.results ?? []).map((b: any) => b.c);
+      if (spyCloses.length >= 50) {
+        spyMa50 = spyCloses.slice(-50).reduce((a, b) => a + b, 0) / 50;
+      }
+    } catch {}
+
     const [watchlist, openTickers] = await Promise.all([getScanUniverse(), getOpenPositionTickers()]);
     const { count } = await supabase.from('oe_auto_orders').select('*', { count: 'exact', head: true }).eq('status', 'open') as any;
     const openCount = count ?? 0;
@@ -175,7 +200,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (openCount + placed.length >= maxPositions) break;
       if (openTickers.includes(ticker)) continue;
 
-      const signal = await scoreTickerSignal(ticker).catch(() => null);
+      const signal = await scoreTickerSignal(ticker, spyMa50).catch(() => null);
       if (!signal || signal.score < minConviction || signal.signal === 'none') continue;
 
       const option = await findBestOption(ticker, signal.price).catch(() => null);
