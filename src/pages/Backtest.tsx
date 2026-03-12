@@ -73,6 +73,10 @@ export default function Backtest() {
   const [startingBalance, setStartingBalance] = useState('10000');
   const [riskMode, setRiskMode]           = useState<'conviction'|'fixed'>('conviction');
   const [fixedRiskPct, setFixedRiskPct]   = useState('2');
+  const [riskScore3, setRiskScore3]       = useState('5');
+  const [riskScore2, setRiskScore2]       = useState('3');
+  const [riskScore1, setRiskScore1]       = useState('1');
+  const [maxContracts, setMaxContracts]   = useState('20');
   const [profitTarget, setProfitTarget]   = useState('75');
   const [stopLoss, setStopLoss]           = useState('35');
   const [useTrailing, setUseTrailing]     = useState(true);
@@ -109,6 +113,8 @@ export default function Backtest() {
         trailing: useTrailing ? 'true' : 'false',
         trail_trigger: trailTrigger, trail_pct: trailPct,
         min_conviction: minConviction, dte, cooldown_days: cooldown,
+        risk_score3: riskScore3, risk_score2: riskScore2, risk_score1: riskScore1,
+        max_contracts: maxContracts,
       });
       const res = await fetch(`/api/backtest?${params}`);
       const data = await res.json();
@@ -197,28 +203,50 @@ export default function Backtest() {
                 <label className="text-[11px] text-muted-foreground">Starting Balance ($)</label>
                 <Input type="number" value={startingBalance} onChange={e => setStartingBalance(e.target.value)} className="h-8 text-sm" />
               </div>
-              <div className="space-y-1 md:col-span-2">
-                <label className="text-[11px] text-muted-foreground">Risk Per Trade</label>
-                <div className="flex gap-2">
-                  <button onClick={() => setRiskMode('conviction')}
-                    className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'conviction' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
-                    By Conviction (1%/2%/3%)
-                  </button>
-                  <button onClick={() => setRiskMode('fixed')}
-                    className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'fixed' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
-                    Fixed %
-                  </button>
-                  {riskMode === 'fixed' && (
-                    <div className="flex items-center gap-1">
-                      <Input type="number" value={fixedRiskPct} onChange={e => setFixedRiskPct(e.target.value)} className="h-8 w-16 text-sm" />
-                      <span className="text-xs text-muted-foreground">%</span>
-                    </div>
-                  )}
-                </div>
-                {riskMode === 'conviction' && (
-                  <p className="text-[10px] text-muted-foreground">Score 3 = 3% · Score 2 = 2% · Score 1 = 1% of current balance</p>
-                )}
+              <div className="space-y-1">
+                <label className="text-[11px] text-muted-foreground">Max Contracts / Trade</label>
+                <Input type="number" value={maxContracts} onChange={e => setMaxContracts(e.target.value)} className="h-8 text-sm" />
+                <p className="text-[10px] text-muted-foreground">Hard cap regardless of balance</p>
               </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[11px] text-muted-foreground">Risk Per Trade</label>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => setRiskMode('conviction')}
+                  className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'conviction' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
+                  By Conviction
+                </button>
+                <button onClick={() => setRiskMode('fixed')}
+                  className={`px-3 py-1.5 rounded text-[11px] font-medium border transition-colors ${riskMode === 'fixed' ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}>
+                  Fixed %
+                </button>
+              </div>
+              {riskMode === 'conviction' && (
+                <div className="grid grid-cols-3 gap-3 pt-1">
+                  {[
+                    { label: 'Score 3 % (best setup)', value: riskScore3, set: setRiskScore3, color: 'text-green-400' },
+                    { label: 'Score 2 % (good setup)',  value: riskScore2, set: setRiskScore2, color: 'text-yellow-400' },
+                    { label: 'Score 1 % (marginal)',    value: riskScore1, set: setRiskScore1, color: 'text-muted-foreground' },
+                  ].map(({ label, value, set, color }) => (
+                    <div key={label} className="space-y-1">
+                      <label className={`text-[11px] ${color}`}>{label}</label>
+                      <div className="flex items-center gap-1">
+                        <Input type="number" value={value} onChange={e => set(e.target.value)} className="h-8 text-sm" />
+                        <span className="text-xs text-muted-foreground">%</span>
+                      </div>
+                    </div>
+                  ))}
+                  <p className="col-span-3 text-[10px] text-muted-foreground">
+                    % of current balance risked per trade · more contracts bought automatically as balance grows
+                  </p>
+                </div>
+              )}
+              {riskMode === 'fixed' && (
+                <div className="flex items-center gap-2 pt-1">
+                  <Input type="number" value={fixedRiskPct} onChange={e => setFixedRiskPct(e.target.value)} className="h-8 w-20 text-sm" />
+                  <span className="text-xs text-muted-foreground">% of balance on every trade</span>
+                </div>
+              )}
             </div>
           </div>
 

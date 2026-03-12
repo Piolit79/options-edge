@@ -189,6 +189,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     min_conviction = '2',
     dte            = '45',
     cooldown_days  = '15',
+    risk_score3    = '5',   // % of balance to risk on score-3 setups
+    risk_score2    = '3',   // % of balance to risk on score-2 setups
+    risk_score1    = '1',   // % of balance to risk on score-1 setups
+    max_contracts  = '20',  // hard cap — no single trade buys more than this
   } = req.query as Record<string, string>;
 
   // Ticker universe
@@ -210,6 +214,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const minConviction  = parseInt(min_conviction);
   const targetDte      = parseInt(dte);
   const cooldown       = parseInt(cooldown_days);
+  const convictionRisk: Record<number, number> = {
+    3: parseFloat(risk_score3) / 100,
+    2: parseFloat(risk_score2) / 100,
+    1: parseFloat(risk_score1) / 100,
+  };
+  const maxContractsCap = parseInt(max_contracts);
 
   // Pre-fetch all bars in parallel (including SPY for regime filter)
   // This is far faster than sequential and prevents Vercel timeout on 35+ tickers
@@ -261,13 +271,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .toISOString().split('T')[0];
         const optionSymbol = buildOCCSymbol(ticker, expirationDate, strike);
 
-        // Position sizing
+        // Position sizing — conviction mode uses per-score risk %, fixed uses one flat %
         const riskFraction = risk_per_trade === 'conviction'
-          ? (CONVICTION_RISK[sig.score] ?? 0.02)
+          ? (convictionRisk[sig.score] ?? 0.02)
           : parseFloat(risk_per_trade) / 100;
-        const capitalRisked  = balance * riskFraction;
+        const capitalRisked   = balance * riskFraction;
         const costPerContract = entryOptionPrice * 100;
-        const contracts      = Math.max(1, Math.floor(capitalRisked / costPerContract));
+        const contracts       = Math.min(
+          maxContractsCap,
+          Math.max(1, Math.floor(capitalRisked / costPerContract))
+        );
 
         // ── Simulate day-by-day ───────────────────────────────────────────
         let exitDate         = bars[Math.min(i + targetDte, bars.length - 1)].t;
