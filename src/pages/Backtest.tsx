@@ -12,6 +12,7 @@ interface BacktestTrade {
   ticker: string; signal: string; score: number;
   entryDate: string; exitDate: string; daysHeld: number;
   stockEntryPrice: number; strike: number;
+  optionSymbol: string;
   entryOptionPrice: number; exitOptionPrice: number; peakOptionPrice: number;
   contracts: number; capitalRisked: number;
   pnlPct: number; pnlDollars: number;
@@ -405,6 +406,7 @@ export default function Backtest() {
                     <tr className="border-b border-border/50 text-muted-foreground">
                       <th className="text-left px-3 py-2">Stock</th>
                       <th className="text-left px-3 py-2">Setup</th>
+                      <th className="text-left px-3 py-2">Contract</th>
                       <th className="text-left px-3 py-2">Entry</th>
                       <th className="text-left px-3 py-2">Exit</th>
                       <th className="text-right px-3 py-2">Days</th>
@@ -424,6 +426,7 @@ export default function Backtest() {
                       <tr key={i} className="hover:bg-muted/20">
                         <td className="px-3 py-1.5 font-semibold">{t.ticker}</td>
                         <td className="px-3 py-1.5"><Badge variant="outline" className="text-[9px]">{SIGNAL_LABELS[t.signal] ?? t.signal}</Badge></td>
+                        <td className="px-3 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-nowrap">{t.optionSymbol}</td>
                         <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{t.entryDate}</td>
                         <td className="px-3 py-1.5 tabular-nums text-muted-foreground">{t.exitDate}</td>
                         <td className="px-3 py-1.5 tabular-nums text-right">{t.daysHeld}</td>

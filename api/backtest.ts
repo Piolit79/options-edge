@@ -120,10 +120,18 @@ async function fetchBars(ticker: string, days: number): Promise<Bar[]> {
 
 const CONVICTION_RISK: Record<number, number> = { 3: 0.03, 2: 0.02, 1: 0.01 };
 
+function buildOCCSymbol(ticker: string, expDate: string, strike: number): string {
+  // expDate is YYYY-MM-DD, OCC format: TICKER(6) + YYMMDD + C + 8-digit strike (5 int 3 dec)
+  const d = expDate.replace(/-/g, '').slice(2); // YYMMDD
+  const strikeStr = Math.round(strike * 1000).toString().padStart(8, '0');
+  return `${ticker.padEnd(6)}${d}C${strikeStr}`;
+}
+
 export interface BacktestTrade {
   ticker: string; signal: string; score: number;
   entryDate: string; exitDate: string; daysHeld: number;
   stockEntryPrice: number; strike: number;
+  optionSymbol: string;
   entryOptionPrice: number; exitOptionPrice: number; peakOptionPrice: number;
   contracts: number; capitalRisked: number;
   pnlPct: number; pnlDollars: number;
@@ -207,6 +215,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const entryOptionPrice = bsCall(stockEntryPrice, strike, T0, sigma);
         if (entryOptionPrice < 0.10) continue;
 
+        const expirationDate = new Date(new Date(barDate).getTime() + targetDte * 86400000)
+          .toISOString().split('T')[0];
+        const optionSymbol = buildOCCSymbol(ticker, expirationDate, strike);
+
         // Position sizing
         const riskFraction = risk_per_trade === 'conviction'
           ? (CONVICTION_RISK[sig.score] ?? 0.02)
@@ -283,7 +295,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ticker, signal: sig.signal, score: sig.score,
           entryDate: barDate, exitDate, daysHeld,
           stockEntryPrice: Math.round(stockEntryPrice * 100) / 100,
-          strike,
+          strike, optionSymbol,
           entryOptionPrice:  Math.round(entryOptionPrice * 100) / 100,
           exitOptionPrice:   Math.round(exitOptionPrice * 100) / 100,
           peakOptionPrice:   Math.round(peakOptionPrice * 100) / 100,
