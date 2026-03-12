@@ -116,11 +116,18 @@ function detectSignal(
 // ── Fetch bars (OHLCV) ───────────────────────────────────────────────────────
 interface Bar { o: number; h: number; l: number; c: number; v: number; t: string; }
 
-async function fetchBars(ticker: string, days: number): Promise<Bar[]> {
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+async function fetchBars(ticker: string, days: number, attempt = 0): Promise<Bar[]> {
   const from = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
   const to   = new Date().toISOString().split('T')[0];
   const url  = `${POLYGON}/v2/aggs/ticker/${ticker}/range/1/day/${from}/${to}?limit=1000&apiKey=${POLYGON_KEY}`;
   const r = await fetch(url);
+  // Retry once on 429 (rate limit) or 5xx after a short back-off
+  if ((r.status === 429 || r.status >= 500) && attempt < 2) {
+    await sleep(attempt === 0 ? 1000 : 3000);
+    return fetchBars(ticker, days, attempt + 1);
+  }
   if (!r.ok) throw new Error(`Polygon ${r.status} for ${ticker}`);
   const d = await r.json();
   if (d.status === 'ERROR' || d.error) throw new Error(d.error ?? `Polygon error for ${ticker}`);
@@ -130,10 +137,10 @@ async function fetchBars(ticker: string, days: number): Promise<Bar[]> {
   }));
 }
 
-// Pre-fetch all tickers in parallel batches so sequential processing doesn't time out
+// Pre-fetch all tickers in small parallel batches with pauses to avoid rate limiting
 async function prefetchBars(tickers: string[], days: number): Promise<Map<string, Bar[]>> {
   const map = new Map<string, Bar[]>();
-  const BATCH = 10; // 10 concurrent fetches at a time
+  const BATCH = 5; // conservative — Polygon free tier handles ~5 concurrent well
   for (let i = 0; i < tickers.length; i += BATCH) {
     const batch = tickers.slice(i, i + BATCH);
     const settled = await Promise.allSettled(
@@ -141,8 +148,9 @@ async function prefetchBars(tickers: string[], days: number): Promise<Map<string
     );
     for (const r of settled) {
       if (r.status === 'fulfilled') map.set(r.value.t, r.value.bars);
-      // rejected = rate-limited or bad ticker — skip silently
     }
+    // Pause between batches so we don't saturate the free-tier rate limit
+    if (i + BATCH < tickers.length) await sleep(300);
   }
   return map;
 }
