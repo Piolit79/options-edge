@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { buildOCCSymbol, buildPolygonSymbol, placeLiveOrder } from './tt-place.js';
 import { getOptionsChain, getOptionSnapshots } from './lib/alpaca.js';
+import { TIER1_TICKERS, UNIVERSE } from './lib/universe.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL ?? 'https://nlusfndskgdcottasfdy.supabase.co',
@@ -18,10 +19,14 @@ async function getSettings(): Promise<Record<string, string>> {
   return Object.fromEntries((data ?? []).map((r: any) => [r.key, r.value]));
 }
 
-async function getWatchlist(): Promise<string[]> {
-  const { data } = await supabase.from('oe_watchlist').select('ticker');
-  const tickers = (data ?? []).map((r: any) => r.ticker as string);
-  return tickers.length ? tickers : ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD'];
+async function getScanUniverse(): Promise<string[]> {
+  // Check settings for scan_mode: 'tier1' (default, 35 stocks), 'all' (full ~180), or sector name
+  const { data } = await supabase.from('oe_settings').select('key,value').in('key', ['scan_mode']);
+  const settings = Object.fromEntries((data ?? []).map((r: any) => [r.key, r.value]));
+  const mode = settings.scan_mode ?? 'tier1';
+  if (mode === 'all') return Object.values(UNIVERSE).flat();
+  if (UNIVERSE[mode]) return UNIVERSE[mode];
+  return TIER1_TICKERS;
 }
 
 async function getOpenPositionTickers(): Promise<string[]> {
@@ -156,7 +161,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const minConviction = parseInt(settings.min_conviction ?? '2');
     const isSimulation = settings.mode !== 'live';
 
-    const [watchlist, openTickers] = await Promise.all([getWatchlist(), getOpenPositionTickers()]);
+    const [watchlist, openTickers] = await Promise.all([getScanUniverse(), getOpenPositionTickers()]);
     const { count } = await supabase.from('oe_auto_orders').select('*', { count: 'exact', head: true }).eq('status', 'open') as any;
     const openCount = count ?? 0;
 

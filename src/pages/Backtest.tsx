@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { Play, TrendingUp, TrendingDown, Target, BarChart2 } from 'lucide-react';
+import { Play, TrendingUp, TrendingDown, Target, BarChart2, Info } from 'lucide-react';
 
 interface BacktestTrade {
   ticker: string; signal: string; score: number;
@@ -29,6 +29,12 @@ const SIGNAL_LABELS: Record<string, string> = {
   oversold_uptrend: 'Oversold',
 };
 
+const SIGNAL_DESCRIPTIONS: Record<string, string> = {
+  momentum_dip: 'Above MA50+MA200, RSI<40, dipped 3%+ from recent high',
+  oversold_uptrend: 'Above MA50+MA200, RSI<35 — deeper pullback in uptrend',
+  breakout: 'Above MA50, new 20-day high on volume 1.5x average',
+};
+
 const CLOSE_COLORS: Record<string, string> = {
   profit_target: 'text-green-400',
   stop_loss: 'text-destructive',
@@ -41,8 +47,20 @@ const CLOSE_LABELS: Record<string, string> = {
   expired: 'Expired',
 };
 
+const ALL_SECTORS = [
+  'Tech', 'Financials', 'Healthcare', 'Consumer',
+  'Energy', 'Industrials', 'Communication', 'Semis & Chips', 'ETFs (high OI)',
+];
+
+const UNIVERSE_COUNTS: Record<string, number> = {
+  'Tech': 37, 'Financials': 28, 'Healthcare': 30, 'Consumer': 29,
+  'Energy': 16, 'Industrials': 25, 'Communication': 10,
+  'Semis & Chips': 10, 'ETFs (high OI)': 16,
+};
+
 export default function Backtest() {
-  const [tickers, setTickers] = useState('AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AMD');
+  const [scanMode, setScanMode] = useState<'tier1' | 'sectors'>('tier1');
+  const [selectedSectors, setSelectedSectors] = useState<string[]>(ALL_SECTORS);
   const [days, setDays] = useState('365');
   const [profitTarget, setProfitTarget] = useState('50');
   const [stopLoss, setStopLoss] = useState('35');
@@ -52,13 +70,23 @@ export default function Backtest() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [trades, setTrades] = useState<BacktestTrade[]>([]);
 
+  const toggleSector = (s: string) =>
+    setSelectedSectors(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+
+  const tickerCount = scanMode === 'tier1' ? 35
+    : selectedSectors.reduce((n, s) => n + (UNIVERSE_COUNTS[s] ?? 0), 0);
+
   const run = async () => {
     setLoading(true);
     setSummary(null);
     setTrades([]);
     try {
+      const sectors = scanMode === 'tier1' ? 'tier1'
+        : selectedSectors.length === ALL_SECTORS.length ? 'all'
+        : selectedSectors.join(',');
+
       const params = new URLSearchParams({
-        tickers, days, profit_target: profitTarget,
+        sectors, days, profit_target: profitTarget,
         stop_loss: stopLoss, min_conviction: minConviction, dte,
       });
       const res = await fetch(`/api/backtest?${params}`);
@@ -66,15 +94,16 @@ export default function Backtest() {
       if (data.error) throw new Error(data.error);
       setSummary(data.summary);
       setTrades(data.trades);
-      if (data.trades.length === 0) toast.info('No signals triggered in this period — try a longer date range or lower min conviction');
-      else toast.success(`Backtest complete — ${data.trades.length} trades`);
+      if (data.trades.length === 0)
+        toast.info('No signals in this period — try a longer range or lower conviction');
+      else
+        toast.success(`Backtest complete — ${data.trades.length} trades across ${tickerCount} stocks`);
     } catch (e: any) {
       toast.error(e.message ?? 'Backtest failed');
     }
     setLoading(false);
   };
 
-  // Build equity curve (cumulative P&L per trade)
   const equityCurve = trades.reduce((acc, t) => {
     const prev = acc.length ? acc[acc.length - 1].cumPnL : 0;
     acc.push({ date: t.exitDate, cumPnL: Math.round((prev + t.pnlDollars) * 100) / 100, ticker: t.ticker });
@@ -88,62 +117,98 @@ export default function Backtest() {
       <div>
         <h1 className="text-lg font-bold">Backtest</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Simulate the strategy on historical data using Black-Scholes option pricing
+          Simulate the strategy on historical price data — Black-Scholes option pricing, no manual tickers needed
         </p>
       </div>
 
-      {/* Settings */}
+      {/* Setup explanation */}
+      <div className="grid md:grid-cols-3 gap-3">
+        {Object.entries(SIGNAL_DESCRIPTIONS).map(([sig, desc]) => (
+          <div key={sig} className="rounded-lg border border-border/50 bg-card p-3">
+            <div className="flex items-center gap-2 mb-1">
+              <Info className="h-3 w-3 text-primary shrink-0" />
+              <span className="text-xs font-semibold">{SIGNAL_LABELS[sig]}</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{desc}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Config */}
       <Card>
         <CardContent className="p-4 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Tickers (comma separated)</label>
-            <Input
-              value={tickers}
-              onChange={e => setTickers(e.target.value.toUpperCase())}
-              placeholder="AAPL,MSFT,NVDA..."
-              className="h-8 text-sm font-mono"
-            />
+
+          {/* Universe selector */}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Stock Universe</label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setScanMode('tier1')}
+                className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${scanMode === 'tier1' ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+              >
+                Top 35 (highest OI)
+              </button>
+              <button
+                onClick={() => setScanMode('sectors')}
+                className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${scanMode === 'sectors' ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+              >
+                By Sector
+              </button>
+            </div>
+
+            {scanMode === 'sectors' && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {ALL_SECTORS.map(s => (
+                  <button
+                    key={s}
+                    onClick={() => toggleSector(s)}
+                    className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors ${selectedSectors.includes(s) ? 'bg-primary/20 text-primary border-primary/40' : 'border-border text-muted-foreground'}`}
+                  >
+                    {s} <span className="opacity-60">({UNIVERSE_COUNTS[s]})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <p className="text-[11px] text-muted-foreground">
+              Scanning <strong>{tickerCount}</strong> stocks — all mid/large-cap with deep options markets
+            </p>
           </div>
+
+          {/* Params */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
               { label: 'Days Back', value: days, set: setDays },
               { label: 'Profit Target %', value: profitTarget, set: setProfitTarget },
               { label: 'Stop Loss %', value: stopLoss, set: setStopLoss },
-              { label: 'Min Conviction', value: minConviction, set: setMinConviction },
+              { label: 'Min Conviction (1-3)', value: minConviction, set: setMinConviction },
               { label: 'Option DTE', value: dte, set: setDte },
             ].map(({ label, value, set }) => (
               <div key={label} className="space-y-1">
                 <label className="text-[11px] font-medium text-muted-foreground">{label}</label>
-                <Input
-                  type="number"
-                  value={value}
-                  onChange={e => set(e.target.value)}
-                  className="h-8 text-sm"
-                />
+                <Input type="number" value={value} onChange={e => set(e.target.value)} className="h-8 text-sm" />
               </div>
             ))}
           </div>
-          <Button onClick={run} disabled={loading} className="w-full md:w-auto">
-            <Play className="h-3.5 w-3.5 mr-2" />
-            {loading ? 'Running backtest...' : 'Run Backtest'}
-          </Button>
-          {loading && (
-            <p className="text-xs text-muted-foreground">
-              Fetching historical data and simulating trades — takes 10–30 seconds...
-            </p>
-          )}
+
+          <div className="flex items-center gap-3">
+            <Button onClick={run} disabled={loading || (scanMode === 'sectors' && selectedSectors.length === 0)}>
+              <Play className="h-3.5 w-3.5 mr-2" />
+              {loading ? 'Running...' : `Run Backtest (${tickerCount} stocks)`}
+            </Button>
+            {loading && (
+              <p className="text-xs text-muted-foreground">Fetching historical data — takes 15–60 seconds...</p>
+            )}
+          </div>
         </CardContent>
       </Card>
 
       {loading && (
-        <div className="space-y-3">
-          {[1,2,3].map(i => <Skeleton key={i} className="h-20 w-full" />)}
-        </div>
+        <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-20 w-full" />)}</div>
       )}
 
       {summary && (
         <>
-          {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card>
               <CardContent className="p-4">
@@ -164,7 +229,7 @@ export default function Backtest() {
                 <div className={`text-2xl font-bold ${finalPnL >= 0 ? 'gain' : 'loss'}`}>
                   {finalPnL >= 0 ? '+' : ''}${finalPnL.toFixed(0)}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">1 contract/trade</div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">1 contract per trade</div>
               </CardContent>
             </Card>
             <Card>
@@ -186,7 +251,8 @@ export default function Backtest() {
             {Object.entries(summary.bySignal).map(([sig, stats]) => (
               <Card key={sig}>
                 <CardContent className="p-4">
-                  <div className="text-xs font-semibold mb-2">{SIGNAL_LABELS[sig] ?? sig}</div>
+                  <div className="text-xs font-semibold mb-1">{SIGNAL_LABELS[sig] ?? sig}</div>
+                  <div className="text-[10px] text-muted-foreground mb-3">{SIGNAL_DESCRIPTIONS[sig]}</div>
                   <div className="grid grid-cols-3 gap-2 text-center">
                     <div>
                       <div className="text-lg font-bold">{stats.trades}</div>
@@ -210,7 +276,6 @@ export default function Backtest() {
             ))}
           </div>
 
-          {/* Equity curve */}
           {equityCurve.length > 1 && (
             <Card>
               <CardHeader>
@@ -225,15 +290,12 @@ export default function Backtest() {
                     <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
                     <Tooltip
                       contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: 6, fontSize: 11 }}
-                      formatter={(v: any, _: any, props: any) => [`$${v.toFixed(2)} — ${props.payload.ticker}`, 'Cumulative P&L']}
+                      formatter={(v: any, _: any, p: any) => [`$${Number(v).toFixed(2)} — ${p.payload.ticker}`, 'Cum. P&L']}
                     />
                     <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                    <Line
-                      type="monotone"
-                      dataKey="cumPnL"
+                    <Line type="monotone" dataKey="cumPnL"
                       stroke={finalPnL >= 0 ? 'hsl(var(--primary))' : 'hsl(var(--destructive))'}
-                      strokeWidth={2}
-                      dot={false}
+                      strokeWidth={2} dot={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
@@ -241,7 +303,6 @@ export default function Backtest() {
             </Card>
           )}
 
-          {/* Trade table */}
           <Card>
             <CardHeader><CardTitle>All Trades ({trades.length})</CardTitle></CardHeader>
             <CardContent className="p-0">
@@ -250,14 +311,14 @@ export default function Backtest() {
                   <thead>
                     <tr className="border-b border-border/50 text-muted-foreground">
                       <th className="text-left px-4 py-2">Ticker</th>
-                      <th className="text-left px-4 py-2">Signal</th>
+                      <th className="text-left px-4 py-2">Setup</th>
                       <th className="text-left px-4 py-2">Entry</th>
                       <th className="text-left px-4 py-2">Exit</th>
                       <th className="text-right px-4 py-2">Days</th>
-                      <th className="text-right px-4 py-2">Stock</th>
+                      <th className="text-right px-4 py-2">Stock $</th>
                       <th className="text-right px-4 py-2">Entry $</th>
                       <th className="text-right px-4 py-2">Exit $</th>
-                      <th className="text-right px-4 py-2">P&L %</th>
+                      <th className="text-right px-4 py-2">P&L</th>
                       <th className="text-right px-4 py-2">Reason</th>
                     </tr>
                   </thead>
@@ -293,8 +354,8 @@ export default function Backtest() {
       {!summary && !loading && (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <BarChart2 className="h-10 w-10 mb-3 opacity-30" />
-          <p className="text-sm">Configure settings and click Run Backtest</p>
-          <p className="text-xs mt-1">Uses Black-Scholes pricing on real historical price data</p>
+          <p className="text-sm">Select universe and click Run Backtest</p>
+          <p className="text-xs mt-1">Uses real historical prices + Black-Scholes to simulate each trade</p>
         </div>
       )}
     </div>

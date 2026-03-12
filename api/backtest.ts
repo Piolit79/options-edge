@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { UNIVERSE, TIER1_TICKERS } from './lib/universe.js';
 
 const POLYGON = 'https://api.polygon.io';
 const POLYGON_KEY = process.env.POLYGON_API_KEY!;
@@ -97,7 +98,7 @@ export interface BacktestTrade {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const {
-    tickers = 'AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA,AMD',
+    sectors = 'all',        // comma list of sector names, or 'all' or 'tier1'
     days = '365',
     profit_target = '50',
     stop_loss = '35',
@@ -105,7 +106,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     dte = '45',
   } = req.query as Record<string, string>;
 
-  const tickerList = tickers.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+  // Resolve ticker list from universe
+  let tickerList: string[];
+  if (sectors === 'tier1') {
+    tickerList = TIER1_TICKERS;
+  } else if (sectors === 'all') {
+    tickerList = Object.values(UNIVERSE).flat();
+  } else {
+    const sectorList = sectors.split(',').map(s => s.trim());
+    tickerList = sectorList.flatMap(s => UNIVERSE[s] ?? []);
+    if (!tickerList.length) tickerList = TIER1_TICKERS;
+  }
   const daysBack = parseInt(days);
   const profitTarget = parseFloat(profit_target) / 100;
   const stopLoss = parseFloat(stop_loss) / 100;
