@@ -64,8 +64,10 @@ export default function OptionsChain() {
       <TableCell className="tabular-nums">{c.bid > 0 ? c.bid.toFixed(2) : '—'}</TableCell>
       <TableCell className="tabular-nums">{c.ask > 0 ? c.ask.toFixed(2) : '—'}</TableCell>
       <TableCell className="tabular-nums font-medium">{c.mid > 0 ? c.mid.toFixed(2) : '—'}</TableCell>
-      <TableCell className="tabular-nums text-muted-foreground">{c.volume?.toLocaleString() ?? '—'}</TableCell>
-      <TableCell className="tabular-nums text-muted-foreground">{c.in_the_money ? <span className="gain text-[10px]">ITM</span> : <span className="text-muted-foreground text-[10px]">OTM</span>}</TableCell>
+      <TableCell className="tabular-nums text-muted-foreground">{c.open_interest > 0 ? c.open_interest.toLocaleString() : '—'}</TableCell>
+      <TableCell className="tabular-nums text-muted-foreground">{c.delta != null ? c.delta.toFixed(2) : '—'}</TableCell>
+      <TableCell className="tabular-nums text-muted-foreground">{c.implied_volatility != null ? `${c.implied_volatility.toFixed(1)}%` : '—'}</TableCell>
+      <TableCell className="tabular-nums text-[10px]">{c.in_the_money ? <span className="gain">ITM</span> : <span className="text-muted-foreground">OTM</span>}</TableCell>
     </TableRow>
   );
 
@@ -146,10 +148,12 @@ export default function OptionsChain() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Strike</TableHead>
-                      <TableHead>Prev Open</TableHead>
-                      <TableHead>Prev Close</TableHead>
-                      <TableHead>VWAP</TableHead>
-                      <TableHead>Volume</TableHead>
+                      <TableHead>Bid</TableHead>
+                      <TableHead>Ask</TableHead>
+                      <TableHead>Mid</TableHead>
+                      <TableHead>OI</TableHead>
+                      <TableHead>Delta</TableHead>
+                      <TableHead>IV</TableHead>
                       <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -169,10 +173,12 @@ export default function OptionsChain() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Strike</TableHead>
-                      <TableHead>Prev Open</TableHead>
-                      <TableHead>Prev Close</TableHead>
-                      <TableHead>VWAP</TableHead>
-                      <TableHead>Volume</TableHead>
+                      <TableHead>Bid</TableHead>
+                      <TableHead>Ask</TableHead>
+                      <TableHead>Mid</TableHead>
+                      <TableHead>OI</TableHead>
+                      <TableHead>Delta</TableHead>
+                      <TableHead>IV</TableHead>
                       <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>

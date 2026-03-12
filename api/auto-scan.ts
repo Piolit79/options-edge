@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { buildOCCSymbol, buildPolygonSymbol, placeLiveOrder } from './tt-place';
+import { buildOCCSymbol, buildPolygonSymbol, placeLiveOrder } from './tt-place.js';
+import { getOptionsChain, getOptionSnapshots } from './lib/alpaca.js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL ?? 'https://nlusfndskgdcottasfdy.supabase.co',
@@ -82,44 +83,56 @@ async function scoreTickerSignal(ticker: string): Promise<{ signal: string; scor
 async function findBestOption(ticker: string, stockPrice: number): Promise<{
   strike: number; expiration: string; mid: number; optionTicker: string;
 } | null> {
-  // Get reference contracts — calls, 30–75 DTE
-  const contractsRes = await fetch(
-    `${POLYGON}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=call&limit=100&apiKey=${POLYGON_KEY}`
-  );
-  const contractsData = await contractsRes.json();
-  const contracts: any[] = contractsData.results ?? [];
+  // Use Alpaca for real greeks — target delta 0.40–0.60, DTE 30–75
+  const contracts = await getOptionsChain(ticker, 'call', 30, 75);
+  if (!contracts.length) return null;
 
-  const now = Date.now();
-  const candidates = contracts
-    .map((c: any) => {
-      const dte = Math.round((new Date(c.expiration_date).getTime() - now) / 864e5);
-      const distFromATM = Math.abs(c.strike_price - stockPrice);
-      return { strike: c.strike_price, expiration: c.expiration_date, dte, distFromATM, optionTicker: c.ticker };
-    })
-    .filter((c: any) => c.dte >= 30 && c.dte <= 75);
+  // Fetch snapshots for all candidates to get real delta + bid/ask
+  const symbols = contracts.map(c => c.symbol);
+  const snapshots = await getOptionSnapshots(symbols);
 
-  if (!candidates.length) {
-    // Fallback: nearest expiration >= 45 days, ATM strike
-    const exp = new Date();
-    exp.setDate(exp.getDate() + 45);
-    const strike = Math.round(stockPrice / 5) * 5;
-    const optionTicker = buildPolygonSymbol(ticker, exp.toISOString().split('T')[0], 'call', strike);
-    return { strike, expiration: exp.toISOString().split('T')[0], mid: stockPrice * 0.025, optionTicker };
+  let best: { strike: number; expiration: string; mid: number; optionTicker: string; deltaErr: number } | null = null;
+
+  for (const c of contracts) {
+    const snap = snapshots[c.symbol];
+    const delta = snap?.greeks?.delta ?? null;
+    const bid = snap?.latestQuote?.bp ?? 0;
+    const ask = snap?.latestQuote?.ap ?? 0;
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+
+    if (mid <= 0) continue;
+
+    // Prefer delta closest to 0.50 (ATM), accept 0.30–0.70
+    const effectiveDelta = delta ?? Math.abs(parseFloat(c.strike_price as any) - stockPrice) / stockPrice;
+    if (delta !== null && (delta < 0.25 || delta > 0.75)) continue;
+
+    const deltaErr = Math.abs((delta ?? 0.5) - 0.5);
+    if (!best || deltaErr < best.deltaErr) {
+      best = {
+        strike: parseFloat(c.strike_price as any),
+        expiration: c.expiration_date,
+        mid,
+        optionTicker: c.symbol,
+        deltaErr,
+      };
+    }
   }
 
-  // Sort by closest strike to ATM, then closest DTE to 52
-  candidates.sort((a: any, b: any) => a.distFromATM - b.distFromATM || Math.abs(a.dte - 52) - Math.abs(b.dte - 52));
-  const best = candidates[0];
+  if (!best) {
+    // Fallback: nearest strike to ATM by price
+    const fallback = contracts
+      .map(c => ({ ...c, dist: Math.abs(parseFloat(c.strike_price as any) - stockPrice) }))
+      .sort((a, b) => a.dist - b.dist)[0];
+    if (!fallback) return null;
+    return {
+      strike: parseFloat(fallback.strike_price as any),
+      expiration: fallback.expiration_date,
+      mid: stockPrice * 0.025,
+      optionTicker: fallback.symbol,
+    };
+  }
 
-  // Get prev day price for this contract
-  const aggRes = await fetch(
-    `${POLYGON}/v2/aggs/ticker/${encodeURIComponent(best.optionTicker)}/prev?apiKey=${POLYGON_KEY}`
-  );
-  const aggData = await aggRes.json();
-  const agg = aggData.results?.[0];
-  const mid = agg?.vw ?? agg?.c ?? (stockPrice * 0.025);
-
-  return { strike: best.strike, expiration: best.expiration, mid, optionTicker: best.optionTicker };
+  return { strike: best.strike, expiration: best.expiration, mid: best.mid, optionTicker: best.optionTicker };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
